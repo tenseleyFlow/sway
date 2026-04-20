@@ -169,6 +169,49 @@ class TestMarkdown:
         assert "| p1 | `__score_adherence`" in md
 
 
+class TestTerminal:
+    def test_renders_without_error(self) -> None:
+        import io
+
+        from rich.console import Console
+
+        suite = _synth_suite(
+            ProbeResult(
+                name="p1",
+                kind="__score_adherence",
+                verdict=Verdict.PASS,
+                score=0.8,
+                raw=0.12,
+                z_score=3.1,
+                message="looks fine",
+            ),
+            ProbeResult(
+                name="p2",
+                kind="__score_attribution",
+                verdict=Verdict.FAIL,
+                score=0.1,
+                message="a very long message that will be truncated — " * 5,
+            ),
+            ProbeResult(
+                name="p3",
+                kind="__score_adherence",
+                verdict=Verdict.SKIP,
+                score=None,
+            ),
+        )
+        s = score.compute(suite)
+        buf = io.StringIO()
+        console = Console(file=buf, force_terminal=False, width=120)
+        report.to_terminal(suite, s, console=console)
+        out = buf.getvalue()
+        assert "dlm-sway report" in out
+        assert "overall:" in out
+        assert "p1" in out
+        assert "p2" in out
+        # Top findings section kicks in because p2 failed.
+        assert "top findings" in out
+
+
 # Force the SwaySpec model to stay reachable from tests (keeps mypy happy
 # on the eventual CLI path that calls into both).
 assert SwaySpec is not None
