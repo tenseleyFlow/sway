@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import pytest
 
+# Import the probes package once so every shipped probe registers itself
+# with the central registry. Tests that exercise build_probe("delta_kl",
+# …) rely on this.
+import dlm_sway.probes  # noqa: F401
+
 
 @pytest.fixture(autouse=True)
 def _offline_and_no_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
