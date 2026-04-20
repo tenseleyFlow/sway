@@ -269,6 +269,38 @@ class HuggingFaceDifferentialBackend:
         finally:
             self._exit()
 
+    @contextmanager
+    def as_scaled_adapter(self, lam: float) -> Iterator[_HFView]:
+        """Temporarily multiply every LoRA layer's scaling factor by ``lam``.
+
+        Works by walking the PEFT module tree and mutating each
+        ``LoraLayer.scaling[adapter_name]`` in place. The original
+        scalings are restored when the context exits — or when an
+        exception propagates, to keep the model in a sane state.
+        """
+        self._enter(f"scaled({lam})")
+        saved: list[tuple[object, str, float]] = []
+        try:
+            import peft  # noqa: PLC0415 — already a hard dep of this backend
+
+            lora_cls = getattr(peft.tuners.lora, "LoraLayer", None)
+            if lora_cls is None:
+                raise RuntimeError("peft.tuners.lora.LoraLayer not found; check peft>=0.13 pin")
+            for module in self._peft_model.modules():
+                if not isinstance(module, lora_cls):
+                    continue
+                scaling = getattr(module, "scaling", None)
+                if not isinstance(scaling, dict):
+                    continue
+                for key, original in scaling.items():
+                    saved.append((module, key, float(original)))
+                    scaling[key] = float(original) * lam
+            yield self._make_view(f"scaled_{lam:.2f}")
+        finally:
+            for module, key, original in saved:
+                module.scaling[key] = original  # type: ignore[attr-defined]
+            self._exit()
+
     def close(self) -> None:
         """Release GPU memory. Safe to call more than once."""
         if getattr(self, "_peft_model", None) is not None:
