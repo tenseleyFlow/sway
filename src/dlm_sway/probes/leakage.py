@@ -24,7 +24,6 @@ from pydantic import Field
 from dlm_sway.core.result import ProbeResult, Verdict
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
-
 PerturbationKind = Literal["typo", "case_flip", "drop_punct"]
 
 

@@ -68,9 +68,7 @@ def random_adapter(tiny_model_dir: Path, tmp_path_factory: pytest.TempPathFactor
     return adapter_dir
 
 
-def test_disable_adapter_changes_logits(
-    tiny_model_dir: Path, random_adapter: Path
-) -> None:
+def test_disable_adapter_changes_logits(tiny_model_dir: Path, random_adapter: Path) -> None:
     """The keystone invariant: base view ≠ ft view on the same prompt."""
     import numpy as np
 
@@ -94,9 +92,7 @@ def test_disable_adapter_changes_logits(
         backend.close()
 
 
-def test_roundtrip_toggle_restores_base(
-    tiny_model_dir: Path, random_adapter: Path
-) -> None:
+def test_roundtrip_toggle_restores_base(tiny_model_dir: Path, random_adapter: Path) -> None:
     """as_base → as_finetuned → as_base yields a stable base view."""
     import numpy as np
 
