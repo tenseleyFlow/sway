@@ -1,0 +1,160 @@
+"""In-memory backend for unit tests.
+
+Deterministic, torchless, and trivially fast. Tests pass canned responses
+and canned score tables keyed by ``(mode, prompt, completion)``. The same
+backend instance serves as both ``as_base`` and ``as_finetuned`` — it
+switches an internal mode flag.
+
+Use it to drive every probe's unit test without loading a real model.
+For integration tests against a real PEFT adapter, see
+:class:`~dlm_sway.backends.hf.HuggingFaceDifferentialBackend`.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from typing import Literal
+
+import numpy as np
+
+from dlm_sway.core.scoring import RollingLogprob, TokenDist
+
+Mode = Literal["base", "ft"]
+
+
+@dataclass(slots=True)
+class DummyResponses:
+    """Canned data for one mode (base or ft).
+
+    Callers populate one of these per mode and hand both to
+    :class:`DummyDifferentialBackend`.
+    """
+
+    generations: dict[str, str] = field(default_factory=dict)
+    """Prompt → canned completion. Lookup is exact-match."""
+    logprobs: dict[tuple[str, str], float] = field(default_factory=dict)
+    """``(prompt, completion) → sum logprob``. Default ``-10.0`` if missing."""
+    rolling: dict[str, RollingLogprob] = field(default_factory=dict)
+    """Text → canned :class:`RollingLogprob`."""
+    token_dists: dict[str, TokenDist] = field(default_factory=dict)
+    """Prompt → canned :class:`TokenDist`."""
+
+
+class _DummyView:
+    """The per-mode view yielded by ``as_base`` / ``as_finetuned``.
+
+    Implements :class:`~dlm_sway.core.model.Model` *and*
+    :class:`~dlm_sway.core.scoring.ScoringBackend` — i.e. the
+    ``ScoringModel`` intersection.
+    """
+
+    def __init__(self, mode: Mode, responses: DummyResponses) -> None:
+        self.id = mode
+        self._mode: Mode = mode
+        self._r = responses
+
+    # -- Model ---------------------------------------------------------
+    def generate(
+        self,
+        prompt: str,
+        *,
+        max_new_tokens: int,
+        temperature: float = 0.0,
+        top_p: float = 1.0,
+        seed: int = 0,
+    ) -> str:
+        del max_new_tokens, temperature, top_p, seed  # canned; decoding is trivial.
+        try:
+            return self._r.generations[prompt]
+        except KeyError as exc:
+            raise KeyError(
+                f"dummy backend ({self._mode}): no canned generation for prompt {prompt!r}"
+            ) from exc
+
+    def close(self) -> None:
+        return None
+
+    # -- ScoringBackend ------------------------------------------------
+    def logprob_of(self, prompt: str, completion: str) -> float:
+        return self._r.logprobs.get((prompt, completion), -10.0)
+
+    def rolling_logprob(self, text: str) -> RollingLogprob:
+        if text in self._r.rolling:
+            return self._r.rolling[text]
+        # Synthesize a plausible rolling logprob so probes that just
+        # want a non-trivial value work without per-text configuration.
+        tokens = text.split()
+        n = max(len(tokens), 1)
+        per_tok = -2.0 if self._mode == "base" else -1.5
+        return RollingLogprob(
+            token_ids=np.arange(n, dtype=np.int64),
+            logprobs=np.full(max(n - 1, 0), per_tok, dtype=np.float32),
+            num_tokens=n,
+            total_logprob=per_tok * max(n - 1, 0),
+        )
+
+    def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
+        del top_k
+        if prompt in self._r.token_dists:
+            return self._r.token_dists[prompt]
+        # Synthesize a sharp base / broad ft distribution so divergence
+        # probes see a non-zero signal without hand-rolled data.
+        vocab = 1000
+        k = 8
+        if self._mode == "base":
+            lp = np.array([-0.1] + [-5.0] * (k - 1), dtype=np.float32)
+        else:
+            # More uniform mass across the top-k tokens.
+            lp = np.full(k, -math.log(k), dtype=np.float32)
+        return TokenDist(
+            token_ids=np.arange(k, dtype=np.int64),
+            logprobs=lp,
+            vocab_size=vocab,
+            tail_logprob=math.log1p(-float(np.exp(lp).sum())) if np.exp(lp).sum() < 1 else 0.0,
+        )
+
+
+class DummyDifferentialBackend:
+    """Dummy implementation of
+    :class:`~dlm_sway.core.scoring.DifferentialBackend`.
+
+    Construction takes one :class:`DummyResponses` per mode. The two
+    modes are mutually exclusive — the backend enforces that callers
+    exit one view before entering the other, catching bugs in probes
+    that hold a stale view across a toggle.
+    """
+
+    def __init__(self, *, base: DummyResponses, ft: DummyResponses) -> None:
+        self._base = _DummyView("base", base)
+        self._ft = _DummyView("ft", ft)
+        self._active: Mode | None = None
+
+    @contextmanager
+    def as_base(self) -> Iterator[_DummyView]:
+        self._enter("base")
+        try:
+            yield self._base
+        finally:
+            self._exit()
+
+    @contextmanager
+    def as_finetuned(self) -> Iterator[_DummyView]:
+        self._enter("ft")
+        try:
+            yield self._ft
+        finally:
+            self._exit()
+
+    def _enter(self, mode: Mode) -> None:
+        if self._active is not None:
+            raise RuntimeError(
+                f"DifferentialBackend view already active ({self._active!r}); "
+                f"exit the current view before entering {mode!r}."
+            )
+        self._active = mode
+
+    def _exit(self) -> None:
+        self._active = None
