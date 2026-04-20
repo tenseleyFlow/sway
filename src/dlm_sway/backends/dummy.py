@@ -245,6 +245,32 @@ class DummyDifferentialBackend:
         finally:
             self._exit()
 
+    def preflight_finite_check(self) -> tuple[bool, str]:
+        """Smoke a single forward pass per view; reject non-finite logits.
+
+        For the dummy backend the canned data is finite by construction
+        unless tests deliberately seed NaN-laden ``TokenDist`` entries —
+        which is exactly what S01 tests do to verify the runner gate.
+        """
+        prompt = "preflight"
+        try:
+            with self.as_base() as base_view:
+                base_dist = base_view.next_token_dist(prompt, top_k=8)
+            with self.as_finetuned() as ft_view:
+                ft_dist = ft_view.next_token_dist(prompt, top_k=8)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"preflight raised {type(exc).__name__}: {exc}"
+
+        for label, dist in (("base", base_dist), ("ft", ft_dist)):
+            if not np.all(np.isfinite(dist.logprobs)):
+                n_bad = int((~np.isfinite(dist.logprobs)).sum())
+                return (
+                    False,
+                    f"{label} view produced {n_bad}/{dist.logprobs.size} non-finite "
+                    f"logprob(s) on prompt {prompt!r}",
+                )
+        return True, ""
+
     def _enter(self, mode: str) -> None:
         if self._active is not None:
             raise RuntimeError(

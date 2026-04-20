@@ -17,6 +17,7 @@ from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict, s
 from dlm_sway.core.scoring import (
     DifferentialBackend,
     NullCalibratedBackend,
+    PreflightCheckable,
     RollingLogprob,
     ScalableDifferentialBackend,
     ScoringBackend,
@@ -30,6 +31,7 @@ __all__ = [
     "Model",
     "ModelSpec",
     "NullCalibratedBackend",
+    "PreflightCheckable",
     "ProbeError",
     "ProbeResult",
     "RollingLogprob",
