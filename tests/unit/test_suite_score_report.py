@@ -165,7 +165,7 @@ class TestMarkdown:
         )
         s = score.compute(suite)
         md = report.to_markdown(suite, s)
-        assert "dlm-sway report" in md
+        assert "sway report" in md
         assert "| p1 | `__score_adherence`" in md
 
 
@@ -204,7 +204,7 @@ class TestTerminal:
         console = Console(file=buf, force_terminal=False, width=120)
         report.to_terminal(suite, s, console=console)
         out = buf.getvalue()
-        assert "dlm-sway report" in out
+        assert "sway report" in out
         assert "overall:" in out
         assert "p1" in out
         assert "p2" in out

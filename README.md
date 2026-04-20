@@ -1,4 +1,4 @@
-# dlm-sway
+# sway
 
 Differential testing for fine-tuned causal language models.
 
@@ -6,9 +6,15 @@ Differential testing for fine-tuned causal language models.
 in a meaningful way, or is the model just defaulting to the pretrained
 base?*
 
-`dlm-sway` gives you a trustworthy, reproducible answer with eleven
+`sway` gives you a trustworthy, reproducible answer with eleven
 purpose-built primitives, each z-scored against a null-adapter baseline.
 No LLM judges. No external APIs. Deterministic on CPU where possible.
+
+> **Naming note.** The source repo and CLI entry point are both `sway`.
+> The PyPI wheel is named `dlm-sway` because `sway` is already taken on
+> PyPI by an unrelated project. `pip install dlm-sway` installs the
+> `sway` command — mismatched names are a PyPA convention (see
+> `pyyaml` → `import yaml`).
 
 ## Install
 
@@ -22,7 +28,7 @@ pip install "dlm-sway[dlm]"               # auto-generate tests from a .dlm file
 ## 90-second smoke test
 
 ```bash
-dlm-sway check path/to/adapter --base HuggingFaceTB/SmolLM2-135M-Instruct
+sway check path/to/adapter --base HuggingFaceTB/SmolLM2-135M-Instruct
 ```
 
 Outputs a verdict in under a minute on CPU for small models: *your
@@ -39,17 +45,18 @@ models:
   ft:   {kind: hf, base: "HuggingFaceTB/SmolLM2-135M-Instruct",
          adapter: "./runs/adapter/v0003"}
 suite:
-  - {name: knows_concept, kind: dir,
-     prompt: "The Dunning-Kruger effect describes",
-     target: " a cognitive bias where",
-     distractor: " a programming language"}
-  - {name: no_reversion, kind: adapter_revert, paraphrases: 4}
+  - {name: null_baseline,       kind: null_adapter, runs: 3}
+  - {name: doc_divergence,      kind: delta_kl,
+     prompts: ["The key insight is", "An important rule"]}
   - {name: section_attribution, kind: section_internalization}
+  - {name: no_leakage,          kind: leakage}
+  - {name: ablation_shape,      kind: adapter_ablation,
+     prompts: ["Tell me more about"]}
 ```
 
 ```bash
-dlm-sway run sway.yaml              # full report to terminal + JSON
-dlm-sway gate sway.yaml --junit     # CI-friendly; non-zero on fail
+sway run sway.yaml              # full report to terminal + JSON
+sway gate sway.yaml --junit     # CI-friendly; non-zero on fail
 ```
 
 ## Why it exists
@@ -60,8 +67,7 @@ user-authored document. The right question is *"did the adapter actually
 move the model toward what I wrote?"* — and existing tools answer this
 poorly.
 
-`dlm-sway` answers it directly via eleven primitives across four
-categories:
+`sway` answers it directly via eleven primitives across four categories:
 
 | Category      | Primitives                                            |
 |---------------|-------------------------------------------------------|
@@ -77,16 +83,22 @@ response. A degenerate one shows a step function or an overshoot-then-
 crash. Nobody else does this because nobody else gets this close to the
 adapter math.
 
+**The calibration.** Every numeric probe z-scores its raw metric against
+a null-adapter baseline — a same-structure LoRA with random-init weights.
+"Your adapter's KL is 4.2σ above noise" is a far stronger claim than a
+fixed threshold. The null-adapter calibration requires a backend that
+implements `NullCalibratedBackend` (the HF backend does).
+
 ## The `.dlm` integration
 
 If you trained your adapter via the [DocumentLanguageModel
-project](https://github.com/tenseleyFlow/DocumentLanguageModel), sway
-can auto-generate a test suite from your document's sections:
+project](https://github.com/tenseleyFlow/DocumentLanguageModel), `sway`
+auto-generates a test suite from your document's sections:
 
 ```bash
 pip install "dlm-sway[hf,dlm]"
-dlm-sway autogen path/to/doc.dlm -o sway.yaml
-dlm-sway run sway.yaml
+sway autogen path/to/doc.dlm -o sway.yaml
+sway run sway.yaml
 ```
 
 Per-section attribution tells you *which* parts of your document

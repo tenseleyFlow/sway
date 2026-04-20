@@ -1,4 +1,4 @@
-"""Command implementations for the ``dlm-sway`` CLI.
+"""Command implementations for the ``sway`` CLI.
 
 Each function here is wired to a subcommand in :mod:`dlm_sway.cli.app`.
 Commands deliberately do as little as possible themselves — the real
@@ -212,7 +212,7 @@ def autogen_cmd(
         typer.Option("--out", "-o", help="Where to write the generated sway.yaml."),
     ] = Path("sway.yaml"),
 ) -> None:
-    """Generate a sway.yaml from a .dlm file (requires dlm-sway[dlm])."""
+    """Generate a sway.yaml from a .dlm file (requires the ``dlm-sway[dlm]`` extra)."""
     import importlib
 
     try:
@@ -237,7 +237,7 @@ def autogen_cmd(
 def doctor_cmd() -> None:
     """Print backend availability and version info."""
     console = Console()
-    console.print(f"[bold]dlm-sway[/bold] {__version__}")
+    console.print(f"[bold]sway[/bold] {__version__}")
     console.print(f"  python:    {sys.version.split()[0]}")
     console.print(f"  platform:  {sys.platform}")
     console.print()
@@ -360,7 +360,7 @@ def _probe_import(name: str) -> str:
 def _render_markdown_from_json(raw: dict[str, Any]) -> str:
     score: dict[str, Any] = raw.get("score", {})
     lines: list[str] = [
-        "# dlm-sway report",
+        "# sway report",
         "",
         f"**Overall:** {score.get('overall', 0.0):.2f} (`{score.get('band', '?')}`)  ",
         f"**Base:** `{raw.get('base_model_id', '?')}`  ",
@@ -384,7 +384,7 @@ def _render_junit_from_json(raw: dict[str, Any]) -> str:
     import xml.etree.ElementTree as ET
 
     probes: list[dict[str, Any]] = raw.get("probes", [])
-    testsuite = ET.Element("testsuite", {"name": "dlm-sway", "tests": str(len(probes))})
+    testsuite = ET.Element("testsuite", {"name": "sway", "tests": str(len(probes))})
     for p in probes:
         tc = ET.SubElement(testsuite, "testcase", {"classname": p["kind"], "name": p["name"]})
         if p["verdict"] == "fail":

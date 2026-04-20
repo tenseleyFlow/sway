@@ -1,1 +1,1 @@
-"""Command-line interface (entry point: ``dlm-sway``)."""
+"""Command-line interface (entry point: ``sway``)."""

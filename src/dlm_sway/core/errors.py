@@ -1,4 +1,4 @@
-"""Exception hierarchy for dlm-sway.
+"""Exception hierarchy for sway.
 
 Every error sway raises inherits from :class:`SwayError` so callers can
 catch the whole family with a single ``except``. Subclasses carry enough
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 
 class SwayError(Exception):
-    """Root of the dlm-sway exception hierarchy."""
+    """Root of the sway exception hierarchy."""
 
 
 class SpecValidationError(SwayError):

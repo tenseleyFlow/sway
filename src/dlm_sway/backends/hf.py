@@ -256,9 +256,10 @@ class HuggingFaceDifferentialBackend:
     def as_base(self) -> Iterator[_HFView]:
         self._enter("base")
         try:
-            # peft.PeftModel.disable_adapter is a context manager; mypy
-            # mis-reads it as a Tensor on this transformers version.
-            with self._peft_model.disable_adapter():  # type: ignore[operator]
+            # peft.PeftModel.disable_adapter is a context manager; newer
+            # transformers builds ship stubs that mis-type it as a Tensor,
+            # so we warn-only there (see hf backend mypy overrides).
+            with self._peft_model.disable_adapter():
                 yield self._make_view("base")
         finally:
             self._exit()

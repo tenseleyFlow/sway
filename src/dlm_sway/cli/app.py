@@ -1,7 +1,7 @@
-"""dlm-sway CLI entry point.
+"""sway CLI entry point.
 
 ``pip install dlm-sway`` installs this module's :func:`main` as the
-``dlm-sway`` console script. Every subcommand is a thin wrapper around a
+``sway`` console script. Every subcommand is a thin wrapper around a
 library-level function so the CLI surface mirrors what programmatic
 callers get.
 """
@@ -14,7 +14,7 @@ from dlm_sway import __version__
 from dlm_sway.cli import commands
 
 app = typer.Typer(
-    name="dlm-sway",
+    name="sway",
     no_args_is_help=True,
     add_completion=False,
     help="Differential testing for fine-tuned causal language models.",
@@ -23,7 +23,7 @@ app = typer.Typer(
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"dlm-sway {__version__}")
+        typer.echo(f"sway {__version__}")
         raise typer.Exit()
 
 

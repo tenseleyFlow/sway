@@ -38,7 +38,7 @@ class SuiteDefaults(BaseModel):
     instead of toggling on one. More memory-heavy; only useful when a
     backend can't do in-place toggling."""
     coverage_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.6
-    """Minimum composite score for ``dlm-sway gate`` to pass."""
+    """Minimum composite score for ``sway gate`` to pass."""
 
 
 class SwaySpec(BaseModel):
@@ -58,7 +58,7 @@ class SwaySpec(BaseModel):
     """Optional path to a ``.dlm`` file. When present, the runner asks
     :mod:`dlm_sway.integrations.dlm.resolver` for typed sections and
     hands them to probes via :attr:`RunContext.sections`. Auto-populated
-    by ``dlm-sway autogen``."""
+    by ``sway autogen``."""
 
     def check_version(self) -> None:
         """Raise ``ValueError`` if the spec version is unsupported.

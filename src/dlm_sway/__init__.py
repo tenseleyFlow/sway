@@ -1,4 +1,8 @@
-"""dlm-sway — differential testing for fine-tuned causal language models."""
+"""sway — differential testing for fine-tuned causal language models.
+
+Published on PyPI as ``dlm-sway`` (the short name is taken); the CLI
+entry point and source repo are ``sway``.
+"""
 
 from __future__ import annotations
 

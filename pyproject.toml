@@ -87,11 +87,12 @@ all = [
 ]
 
 [project.scripts]
-dlm-sway = "dlm_sway.cli.app:main"
+sway = "dlm_sway.cli.app:main"
 
 [project.urls]
-Homepage = "https://github.com/tenseleyFlow/DocumentLanguageModel"
-Issues = "https://github.com/tenseleyFlow/DocumentLanguageModel/issues"
+Homepage = "https://github.com/tenseleyFlow/sway"
+Issues = "https://github.com/tenseleyFlow/sway/issues"
+"Related project" = "https://github.com/tenseleyFlow/DocumentLanguageModel"
 
 [dependency-groups]
 dev = [

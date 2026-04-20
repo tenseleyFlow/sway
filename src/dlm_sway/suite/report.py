@@ -8,7 +8,7 @@ JSON is the machine-readable source of truth — same fields as the
 :class:`SuiteResult` dataclass but flattened for easy downstream parsing
 (dashboards, diff tools, history tracking).
 
-JUnit XML exists to drop into CI pipelines so ``dlm-sway gate``
+JUnit XML exists to drop into CI pipelines so ``sway gate``
 integrates with existing test dashboards with no extra glue.
 """
 
@@ -40,7 +40,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     c = console or Console()
 
     header = Text.assemble(
-        ("dlm-sway report — ", "bold"),
+        ("sway report — ", "bold"),
         (suite.base_model_id, "cyan"),
         ("  vs  ", "dim"),
         (_adapter_label(suite.adapter_id), "cyan"),
@@ -153,7 +153,7 @@ def to_junit(suite: SuiteResult, score: SwayScore) -> str:
     testsuite = ET.Element(
         "testsuite",
         {
-            "name": "dlm-sway",
+            "name": "sway",
             "tests": str(len(suite.probes)),
             "failures": str(sum(1 for p in suite.probes if p.verdict == Verdict.FAIL)),
             "errors": str(sum(1 for p in suite.probes if p.verdict == Verdict.ERROR)),
@@ -187,7 +187,7 @@ def to_junit(suite: SuiteResult, score: SwayScore) -> str:
 def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     """A portable, CI-friendly markdown report."""
     buf = StringIO()
-    buf.write("# dlm-sway report\n\n")
+    buf.write("# sway report\n\n")
     buf.write(f"**Overall:** {score.overall:.2f} (`{score.band}`)  \n")
     buf.write(f"**Base:** `{suite.base_model_id}`  \n")
     buf.write(f"**Adapter:** `{_adapter_label(suite.adapter_id)}`  \n")

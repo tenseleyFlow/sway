@@ -1,4 +1,4 @@
-"""Smoke tests for the dlm-sway CLI.
+"""Smoke tests for the sway CLI.
 
 We avoid exercising backends (they need real models) and instead test
 arg parsing, error paths, and the read-only commands (``doctor``,
@@ -18,7 +18,7 @@ from dlm_sway.cli.app import app
 def test_version_exits_zero() -> None:
     result = CliRunner().invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "dlm-sway" in result.stdout
+    assert "sway" in result.stdout
 
 
 def test_help_lists_all_commands() -> None:
@@ -32,7 +32,7 @@ def test_doctor_runs(capsys) -> None:  # type: ignore[no-untyped-def]
     result = CliRunner().invoke(app, ["doctor"])
     assert result.exit_code == 0
     # Rich applies color codes by default; assert the bare product name appears.
-    assert "dlm-sway" in result.stdout
+    assert "sway" in result.stdout
     assert "backends" in result.stdout
 
 
@@ -69,7 +69,7 @@ def test_report_from_json(tmp_path: Path) -> None:
 
     md = CliRunner().invoke(app, ["report", str(path), "--format", "md"])
     assert md.exit_code == 0
-    assert "dlm-sway report" in md.stdout
+    assert "sway report" in md.stdout
 
     junit = CliRunner().invoke(app, ["report", str(path), "--format", "junit"])
     assert junit.exit_code == 0
