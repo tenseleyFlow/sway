@@ -26,3 +26,7 @@ dist/
 .vscode/
 *.swp
 .DS_Store
+
+# Local planning artifacts — audits, sprint files, author notes.
+# Public planning belongs on GitHub Issues / Projects; .docs/ stays local.
+.docs/
