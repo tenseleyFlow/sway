@@ -37,9 +37,9 @@ class TestFragility:
         assert _fragility(0.0, 0.0) == 0.0
 
     def test_expected_when_perturbed_dropped(self) -> None:
-        import pytest as _pt
+        import pytest
 
-        assert _fragility(0.8, 0.2) == _pt.approx(0.75)
+        assert _fragility(0.8, 0.2) == pytest.approx(0.75)
 
 
 def _prose_section(sid: str, content: str) -> Section:
