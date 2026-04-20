@@ -14,10 +14,13 @@ from __future__ import annotations
 # categorical grouping in :mod:`dlm_sway.core.result`.
 from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     adapter_revert,
+    calibration_drift,
     delta_kl,
+    leakage,
     null_adapter,
     paraphrase_invariance,
     preference_flip,
     prompt_collapse,
     section_internalization,
+    style_fingerprint,
 )
