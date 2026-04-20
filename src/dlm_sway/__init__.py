@@ -13,6 +13,7 @@ from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
 from dlm_sway.core.scoring import (
     DifferentialBackend,
     RollingLogprob,
+    ScalableDifferentialBackend,
     ScoringBackend,
     TokenDist,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "ProbeError",
     "ProbeResult",
     "RollingLogprob",
+    "ScalableDifferentialBackend",
     "ScoringBackend",
     "SpecValidationError",
     "SuiteResult",

@@ -140,6 +140,27 @@ class DifferentialBackend(Protocol):
     def as_finetuned(self) -> AbstractContextManager[_ScoringModel]: ...
 
 
+@runtime_checkable
+class ScalableDifferentialBackend(DifferentialBackend, Protocol):
+    """A differential backend that can also scale the LoRA additive term.
+
+    LoRA applies ``W + (alpha/r) · B @ A`` to a base weight matrix. This
+    protocol exposes a context manager that temporarily multiplies that
+    additive term by ``lam`` for everything inside the ``with`` block.
+
+    ``lam = 0.0`` is equivalent to :meth:`as_base`.
+    ``lam = 1.0`` is equivalent to :meth:`as_finetuned`.
+    ``lam = 1.25`` overshoots — useful for N2 AdapterAblation's
+    response-curve measurement.
+
+    Only the HF backend ships an implementation in v0.1. Probes that
+    need scaling check via ``isinstance(backend, ScalableDifferentialBackend)``
+    at runtime and SKIP gracefully when unavailable.
+    """
+
+    def as_scaled_adapter(self, lam: float) -> AbstractContextManager[_ScoringModel]: ...
+
+
 # Helper Protocol for type-checking the yielded context object: it
 # must satisfy both Model and ScoringBackend. mypy doesn't support
 # intersection types, so we spell it out explicitly.
