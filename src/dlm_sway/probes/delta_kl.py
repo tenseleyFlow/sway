@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._divergence import Divergence, divergence, js_ln2
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 from dlm_sway.probes.null_adapter import get_null_stats
@@ -97,7 +97,7 @@ class DeltaKLProbe(Probe):
             bound = js_ln2() if spec.divergence == "js" else 1.0
             score = min(1.0, raw_mean / bound) if bound > 0.0 else 0.0
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

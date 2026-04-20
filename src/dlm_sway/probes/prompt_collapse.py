@@ -20,7 +20,7 @@ from typing import Literal
 import numpy as np
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._divergence import Divergence, divergence
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
@@ -98,7 +98,7 @@ class PromptCollapseProbe(Probe):
             if half_life is not None
             else "could not fit exponential decay (too flat or non-monotonic)"
         )
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

@@ -27,7 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -145,7 +145,7 @@ class StyleFingerprintProbe(Probe):
         verdict = Verdict.PASS if shift >= spec.assert_shift_gte else Verdict.FAIL
         score = float(np.clip((shift + 1.0) / 2.0, 0.0, 1.0))
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

@@ -23,7 +23,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._calibration_pack import BUILT_IN_PACK
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
@@ -107,7 +107,7 @@ class CalibrationDriftProbe(Probe):
         drift_component = max(0.0, min(1.0, (mean_delta + 1.0) / 1.5))
         score = 0.6 * regress_component + 0.4 * drift_component
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

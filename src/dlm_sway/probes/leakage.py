@@ -21,7 +21,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 PerturbationKind = Literal["typo", "case_flip", "drop_punct"]
@@ -130,7 +130,7 @@ class LeakageSusceptibilityProbe(Probe):
         fragility_bonus = min(1.0, max(0.0, mean_fragility / max(spec.min_fragility, 1e-6)))
         score = 0.7 * recall_score + 0.3 * fragility_bonus
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

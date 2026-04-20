@@ -30,7 +30,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import ScoringBackend
 from dlm_sway.core.sections import Section, SectionKind
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
@@ -124,7 +124,7 @@ class SectionInternalizationProbe(Probe):
         passing_frac = passing / len(eligible)
         verdict = Verdict.PASS if passing_frac >= spec.assert_passing_section_frac else Verdict.FAIL
         score = passing_frac
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

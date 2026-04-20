@@ -30,7 +30,7 @@ from typing import Literal
 import numpy as np
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import ScalableDifferentialBackend
 from dlm_sway.probes._divergence import Divergence, divergence
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
@@ -111,7 +111,7 @@ class AdapterAblationProbe(Probe):
         sat_score = 1.0 if ok_sat else 0.3
         score = 0.4 * lin_score + 0.3 * sat_score + 0.3 * over_score
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
