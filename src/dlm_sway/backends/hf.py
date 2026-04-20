@@ -256,7 +256,9 @@ class HuggingFaceDifferentialBackend:
     def as_base(self) -> Iterator[_HFView]:
         self._enter("base")
         try:
-            with self._peft_model.disable_adapter():
+            # peft.PeftModel.disable_adapter is a context manager; mypy
+            # mis-reads it as a Tensor on this transformers version.
+            with self._peft_model.disable_adapter():  # type: ignore[operator]
                 yield self._make_view("base")
         finally:
             self._exit()
@@ -279,7 +281,9 @@ class HuggingFaceDifferentialBackend:
         exception propagates, to keep the model in a sane state.
         """
         self._enter(f"scaled({lam})")
-        saved: list[tuple[object, str, float]] = []
+        # ``module`` is dynamic (peft LoraLayer subclass) — Any avoids
+        # mypy treating its ``.scaling`` as a Tensor when peft is loaded.
+        saved: list[tuple[Any, str, float]] = []
         try:
             import peft  # noqa: PLC0415 — already a hard dep of this backend
 
@@ -298,7 +302,7 @@ class HuggingFaceDifferentialBackend:
             yield self._make_view(f"scaled_{lam:.2f}")
         finally:
             for module, key, original in saved:
-                module.scaling[key] = original  # type: ignore[attr-defined]
+                module.scaling[key] = original
             self._exit()
 
     @contextmanager

@@ -25,26 +25,13 @@ def fake_dlm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     @dataclass
     class _Frontmatter:
         dlm_id: str = "01TESTULID"
-        base_model: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
-
-    @dataclass
-    class _InstrProbe:
-        prompt: str
-        gold: str
-
-    @dataclass
-    class _PrefTriple:
-        prompt: str
-        chosen: str
-        rejected: str
+        base_model: str = "smollm2-135m"
 
     @dataclass
     class _Section:
         section_id: str
-        kind: str
+        type: str
         content: str
-        probes: tuple[object, ...] = ()
-        preferences: tuple[object, ...] = ()
         tag: str | None = None
 
     @dataclass
@@ -58,20 +45,18 @@ def fake_dlm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
             sections=(
                 _Section(
                     section_id="prose-1",
-                    kind="PROSE",
+                    type="PROSE",
                     content="This is a prose section with some information. Further detail follows.",
                 ),
                 _Section(
                     section_id="instr-1",
-                    kind="INSTRUCTION",
-                    content="Q-A pairs",
-                    probes=(_InstrProbe("What is X?", "X is a concept"),),
+                    type="INSTRUCTION",
+                    content="### Q\nWhat is X?\n\n### A\nX is a concept\n",
                 ),
                 _Section(
                     section_id="pref-1",
-                    kind="PREFERENCE",
-                    content="Prefs",
-                    preferences=(_PrefTriple("Which?", "good answer", "bad answer"),),
+                    type="PREFERENCE",
+                    content="chosen/rejected triple",
                 ),
             ),
         )
@@ -94,20 +79,72 @@ def fake_dlm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         def __init__(self, path: Path) -> None:
             self._p = path
 
-        @classmethod
-        def for_dlm(cls, _dlm_id: str) -> _StorePath:
-            return cls(adapter_dir)
-
         def resolve_current_adapter(self) -> Path:
             return self._p
 
+    def _for_dlm(_dlm_id: str) -> _StorePath:
+        return _StorePath(adapter_dir)
+
     dlm_store_paths.StorePath = _StorePath  # type: ignore[attr-defined]
+    dlm_store_paths.for_dlm = _for_dlm  # type: ignore[attr-defined]
+
+    # Fake base-model resolver — returns a stub with an ``hf_id`` attribute.
+    dlm_base = types.ModuleType("dlm.base_models")
+
+    @dataclass
+    class _BaseSpec:
+        hf_id: str
+        key: str
+
+    def _resolve(key: str) -> _BaseSpec:
+        return _BaseSpec(hf_id="HuggingFaceTB/SmolLM2-135M-Instruct", key=key)
+
+    dlm_base.resolve = _resolve  # type: ignore[attr-defined]
+
+    # Fake instruction / preference parsers.
+    dlm_data = types.ModuleType("dlm.data")
+    dlm_data_instr = types.ModuleType("dlm.data.instruction_parser")
+    dlm_data_pref = types.ModuleType("dlm.data.preference_parser")
+
+    @dataclass
+    class _QAPair:
+        question: str
+        answer: str
+
+    @dataclass
+    class _Triple:
+        prompt: str
+        chosen: str
+        rejected: str
+
+    def _parse_instr(body: str, *, section_id: str) -> list[_QAPair]:
+        del section_id
+        out: list[_QAPair] = []
+        parts = body.split("### Q")
+        for part in parts[1:]:
+            q_block, _, a_block = part.partition("### A")
+            q = q_block.strip()
+            a = a_block.strip()
+            if q and a:
+                out.append(_QAPair(question=q, answer=a))
+        return out
+
+    def _parse_pref(body: str, *, section_id: str) -> list[_Triple]:
+        del body, section_id
+        return [_Triple(prompt="Which?", chosen="good answer", rejected="bad answer")]
+
+    dlm_data_instr.parse_instruction_body = _parse_instr  # type: ignore[attr-defined]
+    dlm_data_pref.parse_preference_body = _parse_pref  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "dlm", dlm_pkg)
     monkeypatch.setitem(sys.modules, "dlm.doc", dlm_doc)
     monkeypatch.setitem(sys.modules, "dlm.doc.parser", dlm_doc_parser)
     monkeypatch.setitem(sys.modules, "dlm.store", dlm_store)
     monkeypatch.setitem(sys.modules, "dlm.store.paths", dlm_store_paths)
+    monkeypatch.setitem(sys.modules, "dlm.base_models", dlm_base)
+    monkeypatch.setitem(sys.modules, "dlm.data", dlm_data)
+    monkeypatch.setitem(sys.modules, "dlm.data.instruction_parser", dlm_data_instr)
+    monkeypatch.setitem(sys.modules, "dlm.data.preference_parser", dlm_data_pref)
 
     # Return a path to a fake .dlm file (the parser won't actually read it).
     dlm_file = tmp_path / "doc.dlm"
