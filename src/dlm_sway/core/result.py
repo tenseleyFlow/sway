@@ -13,6 +13,7 @@ cheap probes.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -137,3 +138,102 @@ class SwayScore:
 def utcnow() -> datetime:
     """Timezone-aware UTC timestamp (used by the runner)."""
     return datetime.now(UTC)
+
+
+def safe_finalize(
+    *,
+    name: str,
+    kind: str,
+    verdict: Verdict,
+    score: float | None = None,
+    raw: float | None = None,
+    z_score: float | None = None,
+    base_value: float | None = None,
+    ft_value: float | None = None,
+    evidence: dict[str, Any] | None = None,
+    message: str = "",
+    duration_s: float = 0.0,
+    critical_fields: tuple[str, ...] = ("raw",),
+) -> ProbeResult:
+    """Build a :class:`ProbeResult` with defense against non-finite metrics.
+
+    Probes hand their candidate result kwargs here instead of constructing
+    a :class:`ProbeResult` directly. The helper inspects every numeric
+    field and classifies it:
+
+    - **Critical field non-finite** (any field named in ``critical_fields``
+      whose value is ``NaN`` or ``±inf``): the whole probe result is
+      converted to :attr:`Verdict.ERROR` with all scalar fields nulled out,
+      the offending values are preserved under
+      ``evidence["non_finite_inputs"]``, and the message explains which
+      field(s) were non-finite.
+    - **Non-critical field non-finite**: nulled out silently (set to
+      ``None``), and the field name appended to
+      ``evidence["defensively_nulled"]`` so a report reader can see what
+      happened.
+    - **Everything finite**: passthrough, no change.
+
+    The default ``critical_fields = ("raw",)`` reflects the design stance:
+    ``raw`` is the probe's ground-truth metric; a non-finite ``raw`` means
+    the probe cannot make a meaningful statement. Probes that care about
+    other fields (e.g., probes whose ``z_score`` is load-bearing) pass a
+    broader tuple.
+
+    This helper is the single shared guardrail sprint 01 installs against
+    the +11639σ class of bug, where NaN logprobs flowed silently through
+    to a PASS verdict. Every numeric probe is expected to finalize through
+    this function.
+    """
+    numeric_kwargs: dict[str, float | None] = {
+        "score": score,
+        "raw": raw,
+        "z_score": z_score,
+        "base_value": base_value,
+        "ft_value": ft_value,
+    }
+
+    non_finite: dict[str, float] = {}
+    for fname, v in numeric_kwargs.items():
+        if isinstance(v, int | float) and not isinstance(v, bool) and not math.isfinite(float(v)):
+            non_finite[fname] = float(v)
+
+    ev: dict[str, Any] = dict(evidence) if evidence is not None else {}
+
+    critical_non_finite = {k: v for k, v in non_finite.items() if k in critical_fields}
+    if critical_non_finite:
+        ev["non_finite_inputs"] = non_finite
+        return ProbeResult(
+            name=name,
+            kind=kind,
+            verdict=Verdict.ERROR,
+            score=None,
+            raw=None,
+            z_score=None,
+            base_value=None,
+            ft_value=None,
+            evidence=ev,
+            message=(
+                f"non-finite critical field(s): {', '.join(sorted(critical_non_finite))} "
+                f"— probe cannot produce a meaningful result"
+            ),
+            duration_s=duration_s,
+        )
+
+    if non_finite:
+        ev.setdefault("defensively_nulled", []).extend(sorted(non_finite))
+        for fname in non_finite:
+            numeric_kwargs[fname] = None
+
+    return ProbeResult(
+        name=name,
+        kind=kind,
+        verdict=verdict,
+        score=numeric_kwargs["score"],
+        raw=numeric_kwargs["raw"],
+        z_score=numeric_kwargs["z_score"],
+        base_value=numeric_kwargs["base_value"],
+        ft_value=numeric_kwargs["ft_value"],
+        evidence=ev,
+        message=message,
+        duration_s=duration_s,
+    )
