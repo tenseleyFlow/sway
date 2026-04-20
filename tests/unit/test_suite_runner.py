@@ -122,12 +122,13 @@ class TestRunner:
         assert result.wall_seconds >= 0
         assert result.probes[0].duration_s >= 0
 
-    def test_null_adapter_skipped_stable_suite_shape(
+    def test_null_adapter_passes_on_null_calibrated_backend(
         self, backend: DummyDifferentialBackend
     ) -> None:
-        spec = _spec({"name": "null", "kind": "null_adapter", "runs": 3})
+        # Dummy backend implements NullCalibratedBackend, so calibration runs.
+        spec = _spec({"name": "null", "kind": "null_adapter", "runs": 2, "prompts": ["q1"]})
         result = run(spec, backend)
-        # Until the HF-level implementation lands, null_adapter reports SKIP
-        # but must not crash the suite.
         assert result.probes[0].kind == "null_adapter"
-        assert result.probes[0].verdict == Verdict.SKIP
+        assert result.probes[0].verdict == Verdict.PASS
+        # And the suite's null_stats bubbles up onto the result.
+        assert "delta_kl" in result.null_stats
