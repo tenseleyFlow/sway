@@ -26,7 +26,18 @@ class TestRegistry:
         with pytest.raises(SpecValidationError, match="adapter"):
             build(ModelSpec(base="x", kind="hf"))
 
-    def test_mlx_not_yet_available(self) -> None:
+    def test_mlx_requires_adapter(self) -> None:
+        with pytest.raises(SpecValidationError, match="adapter"):
+            build(ModelSpec(base="x", kind="mlx"))
+
+    def test_mlx_dispatch_raises_when_mlx_missing(self) -> None:
+        # On non-Apple-Silicon (or Apple without mlx installed), constructing
+        # the MLX backend raises BackendNotAvailableError with a pip hint.
+        # We skip this assertion if mlx happens to be installed.
+        import importlib.util
+
+        if importlib.util.find_spec("mlx") is not None:
+            pytest.skip("mlx is installed; error path not exercised")
         with pytest.raises(BackendNotAvailableError) as exc_info:
             build(ModelSpec(base="x", kind="mlx", adapter=Path("/tmp/a")))
         assert exc_info.value.backend == "mlx"

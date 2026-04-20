@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dlm_sway.core.errors import BackendNotAvailableError, SpecValidationError
+from dlm_sway.core.errors import SpecValidationError
 from dlm_sway.core.model import ModelSpec
 
 if TYPE_CHECKING:
@@ -48,11 +48,14 @@ def build(base_spec: ModelSpec, *, adapter_path: Path | None = None) -> Differen
         return HuggingFaceDifferentialBackend(base_spec=base_spec, adapter_path=effective_adapter)
 
     if base_spec.kind == "mlx":
-        raise BackendNotAvailableError(
-            "mlx",
-            extra="mlx",
-            hint="MLX backend shipping in a later milestone.",
-        )
+        if effective_adapter is None:
+            raise SpecValidationError(
+                "mlx backend requires an adapter path (set `adapter:` on the ft model; "
+                "must be an MLX .npz adapter — use dlm's peft→mlx converter if needed)"
+            )
+        from dlm_sway.backends.mlx import MLXDifferentialBackend
+
+        return MLXDifferentialBackend(base_spec=base_spec, adapter_path=effective_adapter)
 
     if base_spec.kind == "custom":
         return _load_custom(base_spec, effective_adapter)
