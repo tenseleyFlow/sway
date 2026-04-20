@@ -117,6 +117,37 @@ class _DummyView:
         )
 
 
+class _NullView(_DummyView):
+    """A dummy view that perturbs the base distribution with seeded noise.
+
+    Used by :meth:`DummyDifferentialBackend.as_null_adapter`. The
+    perturbation is small (matches an ``init_scale=0.02`` adapter) so
+    the null-vs-base divergence stays well below real-adapter territory
+    in probe tests.
+    """
+
+    def __init__(self, base_responses: DummyResponses, seed: int, init_scale: float) -> None:
+        super().__init__("base", base_responses)
+        self._seed = seed
+        self._init_scale = init_scale
+
+    def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
+        base_dist = super().next_token_dist(prompt, top_k=top_k)
+        rng = np.random.default_rng(self._seed + hash(prompt) % 1_000_003)
+        noise = rng.normal(0.0, self._init_scale, size=base_dist.logprobs.shape).astype(np.float32)
+        new_lp = base_dist.logprobs + noise
+        # Re-normalize (within the top-k slice) so a valid distribution comes back.
+        max_lp = new_lp.max()
+        new_probs = np.exp(new_lp - max_lp)
+        new_probs /= new_probs.sum()
+        return TokenDist(
+            token_ids=base_dist.token_ids,
+            logprobs=np.log(new_probs).astype(np.float32),
+            vocab_size=base_dist.vocab_size,
+            tail_logprob=base_dist.tail_logprob,
+        )
+
+
 class _InterpolatedView(_DummyView):
     """A dummy view where logits/dists are a lam-blend of base and ft.
 
@@ -203,6 +234,14 @@ class DummyDifferentialBackend:
         self._enter(f"scaled({lam})")
         try:
             yield _InterpolatedView(self._base_r, self._ft_r, lam)
+        finally:
+            self._exit()
+
+    @contextmanager
+    def as_null_adapter(self, seed: int, *, init_scale: float = 0.02) -> Iterator[_DummyView]:
+        self._enter(f"null({seed})")
+        try:
+            yield _NullView(self._base_r, seed=seed, init_scale=init_scale)
         finally:
             self._exit()
 

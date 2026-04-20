@@ -301,6 +301,43 @@ class HuggingFaceDifferentialBackend:
                 module.scaling[key] = original  # type: ignore[attr-defined]
             self._exit()
 
+    @contextmanager
+    def as_null_adapter(self, seed: int, *, init_scale: float = 0.02) -> Iterator[_HFView]:
+        """Temporarily replace every LoRA ``A``/``B`` tensor with random noise.
+
+        Same rank, alpha, and target modules as the real adapter — only
+        the weights differ. This is the denominator in every z-score
+        path: "how much signal does structural noise produce?"
+
+        Implementation walks the PEFT module tree for ``lora_A``/``lora_B``
+        parameters, saves a clone of each current value, overwrites in
+        place with a zero-mean Gaussian at ``init_scale``, and restores
+        on exit (including on exception).
+        """
+        import torch
+
+        self._enter(f"null({seed})")
+        gen = torch.Generator(device="cpu").manual_seed(int(seed))
+        saved: list[tuple[torch.nn.Parameter, torch.Tensor]] = []
+        try:
+            for pname, param in self._peft_model.named_parameters():
+                if not any(key in pname for key in ("lora_A", "lora_B")):
+                    continue
+                saved.append((param, param.detach().clone()))
+                with torch.no_grad():
+                    noise = torch.randn(
+                        *param.shape,
+                        generator=gen,
+                        dtype=torch.float32,
+                    ).to(dtype=param.dtype, device=param.device)
+                    param.copy_(noise * init_scale)
+            yield self._make_view(f"null_{seed}")
+        finally:
+            with torch.no_grad():
+                for param, original in saved:
+                    param.copy_(original)
+            self._exit()
+
     def close(self) -> None:
         """Release GPU memory. Safe to call more than once."""
         if getattr(self, "_peft_model", None) is not None:
