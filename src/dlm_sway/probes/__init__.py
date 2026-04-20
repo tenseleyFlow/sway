@@ -16,5 +16,8 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     adapter_revert,
     delta_kl,
     null_adapter,
+    paraphrase_invariance,
+    preference_flip,
     prompt_collapse,
+    section_internalization,
 )
