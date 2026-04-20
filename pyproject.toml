@@ -142,6 +142,8 @@ ignore = [
 # PyTorch's canonical `import torch.nn.functional as F` is universally
 # read, so we allow the naming exception in the HF backend only.
 "src/dlm_sway/backends/hf.py" = ["N812"]
+# The .dlm bridge is the one place allowed to import the ``dlm`` package.
+"src/dlm_sway/integrations/dlm/*.py" = ["TID251"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # Hard architectural boundary: the `dlm` package is only importable
