@@ -161,6 +161,30 @@ class ScalableDifferentialBackend(DifferentialBackend, Protocol):
     def as_scaled_adapter(self, lam: float) -> AbstractContextManager[_ScoringModel]: ...
 
 
+@runtime_checkable
+class NullCalibratedBackend(DifferentialBackend, Protocol):
+    """A differential backend that can produce a "null adapter" view.
+
+    A null adapter has the *same structure* (rank, alpha, target modules)
+    as the real adapter but with weights drawn from a zero-mean Gaussian.
+    Running probes against this view yields the baseline "how much
+    signal does random noise produce" distribution — the denominator in
+    every numeric probe's z-score.
+
+    The context manager takes a ``seed`` so calibration runs can be
+    reproduced and multiple independent null samples can be drawn to
+    estimate ``std``.
+
+    Implementations MUST restore the real adapter on exit, including
+    on exceptions, so a caller can freely interleave null and real
+    calibrations within the same backend lifetime.
+    """
+
+    def as_null_adapter(
+        self, seed: int, *, init_scale: float = 0.02
+    ) -> AbstractContextManager[_ScoringModel]: ...
+
+
 # Helper Protocol for type-checking the yielded context object: it
 # must satisfy both Model and ScoringBackend. mypy doesn't support
 # intersection types, so we spell it out explicitly.
