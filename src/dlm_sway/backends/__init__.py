@@ -55,13 +55,61 @@ def build(base_spec: ModelSpec, *, adapter_path: Path | None = None) -> Differen
         )
 
     if base_spec.kind == "custom":
-        raise BackendNotAvailableError(
-            "custom",
-            extra="hf",
-            hint="Custom backend entry-point dispatch shipping in a later milestone.",
-        )
+        return _load_custom(base_spec, effective_adapter)
 
     raise SpecValidationError(f"unknown backend kind: {base_spec.kind!r}")
+
+
+def _load_custom(base_spec: ModelSpec, adapter: Path | None) -> DifferentialBackend:
+    """Dispatch to a user-supplied backend via ``entry_point='pkg.mod:Name'``.
+
+    The imported class is instantiated as ``Cls(base_spec=..., adapter_path=...)``
+    — the same signature as :class:`dlm_sway.backends.hf.HuggingFaceDifferentialBackend`
+    so authors can model their implementation on the built-in. The
+    result is runtime-checked against :class:`DifferentialBackend` so
+    protocol violations fail at construction, not deep inside a probe.
+    """
+    from dlm_sway.core.scoring import DifferentialBackend as DiffBackend
+
+    entry = base_spec.entry_point
+    if not entry:
+        raise SpecValidationError(
+            "kind='custom' requires an entry_point of the form 'pkg.module:ClassName'"
+        )
+    if ":" not in entry:
+        raise SpecValidationError(f"entry_point must be 'pkg.module:ClassName', got {entry!r}")
+    module_path, _, class_name = entry.partition(":")
+    if not module_path or not class_name:
+        raise SpecValidationError(f"entry_point must be 'pkg.module:ClassName', got {entry!r}")
+
+    import importlib
+
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as exc:
+        raise SpecValidationError(
+            f"custom backend: cannot import module {module_path!r}: {exc}"
+        ) from exc
+    cls = getattr(module, class_name, None)
+    if cls is None:
+        raise SpecValidationError(
+            f"custom backend: module {module_path!r} has no attribute {class_name!r}"
+        )
+
+    try:
+        instance = cls(base_spec=base_spec, adapter_path=adapter)
+    except TypeError as exc:
+        raise SpecValidationError(
+            f"custom backend {entry!r} constructor signature mismatch: {exc}. "
+            "Expected Cls(base_spec: ModelSpec, adapter_path: Path | None)"
+        ) from exc
+
+    if not isinstance(instance, DiffBackend):
+        raise SpecValidationError(
+            f"custom backend {entry!r} does not satisfy DifferentialBackend "
+            "(needs as_base() and as_finetuned() context managers)"
+        )
+    return instance
 
 
 __all__ = ["build"]
