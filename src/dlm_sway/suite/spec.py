@@ -54,6 +54,11 @@ class SwaySpec(BaseModel):
     via :func:`dlm_sway.probes.base.build_probe` so that the set of
     allowed probe kinds is an open registry rather than a closed
     discriminated union."""
+    dlm_source: str | None = None
+    """Optional path to a ``.dlm`` file. When present, the runner asks
+    :mod:`dlm_sway.integrations.dlm.resolver` for typed sections and
+    hands them to probes via :attr:`RunContext.sections`. Auto-populated
+    by ``dlm-sway autogen``."""
 
     def check_version(self) -> None:
         """Raise ``ValueError`` if the spec version is unsupported.

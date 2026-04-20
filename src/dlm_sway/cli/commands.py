@@ -309,16 +309,31 @@ def _load_prompts(path: Path) -> tuple[str, ...]:
 
 def _execute_spec(path: Path) -> tuple[SuiteResult, SwayScore]:
     """Load a spec, build a backend, run the suite, fold scores. Shared
-    by ``run`` and ``gate``."""
+    by ``run`` and ``gate``. Picks up .dlm-derived sections when the
+    spec's ``dlm_source`` is set."""
     from dlm_sway.backends import build as build_backend
     from dlm_sway.suite.loader import load_spec
     from dlm_sway.suite.runner import run as run_suite
     from dlm_sway.suite.score import compute as compute_score
 
     spec = load_spec(path)
+    sections = None
+    doc_text = None
+    if spec.dlm_source is not None:
+        import importlib
+
+        try:
+            resolver = importlib.import_module("dlm_sway.integrations.dlm.resolver")
+            handle = resolver.resolve_dlm(Path(spec.dlm_source))
+            sections = handle.sections
+            doc_text = handle.doc_text
+        except ImportError:
+            # Honoring dlm_source is best-effort — probes that need
+            # sections will SKIP with a pointer at the extra.
+            sections = None
     backend = build_backend(spec.models.ft)
     try:
-        result = run_suite(spec, backend, spec_path=str(path))
+        result = run_suite(spec, backend, spec_path=str(path), sections=sections, doc_text=doc_text)
     finally:
         _close_if_possible(backend)
     score_obj = compute_score(result)
