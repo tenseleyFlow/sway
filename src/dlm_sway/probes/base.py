@@ -24,6 +24,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from dlm_sway.core.errors import SpecValidationError
 from dlm_sway.core.result import ProbeResult
 from dlm_sway.core.scoring import DifferentialBackend
+from dlm_sway.core.sections import Section
 
 
 class ProbeSpec(BaseModel):
@@ -70,7 +71,7 @@ class RunContext:
     backend: DifferentialBackend
     seed: int = 0
     top_k: int = 256
-    sections: tuple[Any, ...] | None = None
+    sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
     null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
 

@@ -19,12 +19,12 @@ Runtime contract:
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from dlm_sway import __version__
 from dlm_sway.core.errors import ProbeError
 from dlm_sway.core.result import ProbeResult, SuiteResult, Verdict, utcnow
 from dlm_sway.core.scoring import DifferentialBackend
+from dlm_sway.core.sections import Section
 from dlm_sway.probes.base import RunContext, build_probe
 from dlm_sway.probes.null_adapter import NullAdapterSpec, get_null_stats
 from dlm_sway.suite.spec import SwaySpec
@@ -36,7 +36,7 @@ def run(
     *,
     spec_path: str = "<memory>",
     doc_text: str | None = None,
-    sections: tuple[Any, ...] | None = None,
+    sections: tuple[Section, ...] | None = None,
 ) -> SuiteResult:
     """Execute every probe in ``spec`` against ``backend``."""
     started = utcnow()
@@ -133,4 +133,4 @@ def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:
     )
 
 
-__all__ = ["run", "get_null_stats"]
+__all__ = ["get_null_stats", "run"]
