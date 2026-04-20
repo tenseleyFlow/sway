@@ -117,6 +117,49 @@ class _DummyView:
         )
 
 
+class _InterpolatedView(_DummyView):
+    """A dummy view where logits/dists are a lam-blend of base and ft.
+
+    Used by :meth:`DummyDifferentialBackend.as_scaled_adapter`.
+    Generation falls back to the ft view at lam>=0.5, base otherwise —
+    rounded because the dummy backend's generations are canned strings
+    with no notion of "how much".
+    """
+
+    def __init__(
+        self,
+        base_responses: DummyResponses,
+        ft_responses: DummyResponses,
+        lam: float,
+    ) -> None:
+        super().__init__(
+            "ft" if lam >= 0.5 else "base", ft_responses if lam >= 0.5 else base_responses
+        )
+        self._base_r = base_responses
+        self._ft_r = ft_responses
+        self._lam = lam
+
+    def logprob_of(self, prompt: str, completion: str) -> float:
+        base_v = self._base_r.logprobs.get((prompt, completion), -10.0)
+        ft_v = self._ft_r.logprobs.get((prompt, completion), -10.0)
+        return (1 - self._lam) * base_v + self._lam * ft_v
+
+    def next_token_dist(self, prompt: str, *, top_k: int = 256):  # type: ignore[no-untyped-def]
+        base_dist = _DummyView("base", self._base_r).next_token_dist(prompt, top_k=top_k)
+        ft_dist = _DummyView("ft", self._ft_r).next_token_dist(prompt, top_k=top_k)
+        # Both dists are on the same synthetic support when unseeded; blend
+        # their logprobs via log-space linear interpolation, which is a
+        # log-linear "tempered" mix and keeps normalization close enough.
+        lam = self._lam
+        blended_lp = (1 - lam) * base_dist.logprobs + lam * ft_dist.logprobs
+        return type(base_dist)(
+            token_ids=base_dist.token_ids,
+            logprobs=blended_lp,
+            vocab_size=base_dist.vocab_size,
+            tail_logprob=base_dist.tail_logprob,
+        )
+
+
 class DummyDifferentialBackend:
     """Dummy implementation of
     :class:`~dlm_sway.core.scoring.DifferentialBackend`.
@@ -125,12 +168,19 @@ class DummyDifferentialBackend:
     modes are mutually exclusive — the backend enforces that callers
     exit one view before entering the other, catching bugs in probes
     that hold a stale view across a toggle.
+
+    Also implements
+    :class:`~dlm_sway.core.scoring.ScalableDifferentialBackend` with a
+    linear-blend between base and ft responses, so probes that need
+    ``as_scaled_adapter`` (N2 AdapterAblation) are unit-testable.
     """
 
     def __init__(self, *, base: DummyResponses, ft: DummyResponses) -> None:
+        self._base_r = base
+        self._ft_r = ft
         self._base = _DummyView("base", base)
         self._ft = _DummyView("ft", ft)
-        self._active: Mode | None = None
+        self._active: str | None = None
 
     @contextmanager
     def as_base(self) -> Iterator[_DummyView]:
@@ -148,7 +198,15 @@ class DummyDifferentialBackend:
         finally:
             self._exit()
 
-    def _enter(self, mode: Mode) -> None:
+    @contextmanager
+    def as_scaled_adapter(self, lam: float) -> Iterator[_DummyView]:
+        self._enter(f"scaled({lam})")
+        try:
+            yield _InterpolatedView(self._base_r, self._ft_r, lam)
+        finally:
+            self._exit()
+
+    def _enter(self, mode: str) -> None:
         if self._active is not None:
             raise RuntimeError(
                 f"DifferentialBackend view already active ({self._active!r}); "
