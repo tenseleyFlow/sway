@@ -111,9 +111,7 @@ class ExternalPerplexityProbe(Probe):
                 kind=spec.kind,
                 verdict=Verdict.ERROR,
                 score=None,
-                message=(
-                    f"unknown corpus {spec.corpus!r}; available: {available_corpora()!r}"
-                ),
+                message=(f"unknown corpus {spec.corpus!r}; available: {available_corpora()!r}"),
             )
 
         try:
@@ -127,9 +125,7 @@ class ExternalPerplexityProbe(Probe):
                 message=f"failed to load corpus {spec.corpus!r}: {exc}",
             )
 
-        chunks = chunk_corpus(
-            corpus_text, chunk_chars=spec.chunk_chars, max_chunks=spec.max_chunks
-        )
+        chunks = chunk_corpus(corpus_text, chunk_chars=spec.chunk_chars, max_chunks=spec.max_chunks)
         if not chunks:
             return ProbeResult(
                 name=spec.name,
@@ -198,9 +194,7 @@ class ExternalPerplexityProbe(Probe):
                 f"z={z:+.2f}σ vs null (lower-is-better)"
             )
         else:
-            verdict = (
-                Verdict.PASS if mean_delta >= spec.assert_mean_delta_gte else Verdict.FAIL
-            )
+            verdict = Verdict.PASS if mean_delta >= spec.assert_mean_delta_gte else Verdict.FAIL
             score = max(0.0, min(1.0, 0.5 + mean_delta))
             message = (
                 f"external_ppl delta={mean_delta:+.3f} nats/tok "

@@ -40,8 +40,7 @@ def load_corpus(name: str) -> str:
     """
     if name not in _CORPORA:
         raise KeyError(
-            f"unknown external-perplexity corpus {name!r}; "
-            f"available: {sorted(_CORPORA)!r}"
+            f"unknown external-perplexity corpus {name!r}; available: {sorted(_CORPORA)!r}"
         )
     path = _CORPUS_DIR / _CORPORA[name]
     raw = path.read_text(encoding="utf-8")
