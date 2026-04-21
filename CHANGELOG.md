@@ -2,6 +2,99 @@
 
 ## Unreleased
 
+### Sprint 21 — Audit 03 closure
+
+Closes the Audit 03 short list — 2 🟠 major + 5 🟡 minor findings the
+audit recommended for v0.1.0 readiness. Full audit at
+`.docs/audits/03-final-audit.md`. Verdict was YELLOW-leaning-GREEN
+with zero critical findings; this sprint pushes it to GREEN on the
+in-scope items. Deferred: F01 (MLX converter — its own feature
+sprint, S24), F05 (resolves naturally at v0.1.0 tag), F06 (dlm API
+compat test — lands with v0.1.0 release in S22). `v0.1.0` PyPI
+publish is deferred to S22 (requires release coordination +
+credentials).
+
+**🟠 Major — degenerate z-score clipping (F02).**
+
+- **`probes/null_adapter`** — null stats now carry an explicit
+  `degenerate: 1.0` field when the calibration ran but produced an
+  unusable baseline (`runs: 1`, or every seed producing the *exact*
+  same raw). The std floor at `1e-6` is preserved for valid-but-tight
+  multi-seed nulls so they still calibrate. Audit observed a
+  `+290,766σ` leakage-probe z under `runs: 1`; post-fix, z_score
+  refuses and the probe falls back to fixed thresholds with a clear
+  footer rollup.
+- **`probes/_zscore.z_score`** — refuses when `stats["degenerate"]`
+  is truthy, independent of the std check. Belt-and-suspenders on
+  top of the existing MIN_STD guard.
+- **`suite/report.collect_degenerate_null_kinds`** — new rollup
+  surface. Terminal + markdown footers gain a
+  "N probe kind(s) had a degenerate null baseline — bump `runs:`"
+  block, distinct from the existing null-opt-outs rollup.
+- 12 new unit tests across `test_null_calibration.py`,
+  `test_zscore_helpers.py`, `test_report_extras_rollup.py`, and
+  `test_probe_external_perplexity.py`. Existing
+  `test_std_floor_prevents_runaway_zscore` was rewritten to assert
+  the fixed behavior (the pre-fix contract WAS the audit's bug).
+
+**🟡 Minor — CI resilience (F03).**
+
+- **`pytest-timeout>=2.3`** + **`tenacity>=9.0`** in dev deps.
+- **`tests/fixtures/tiny_model.py`** wraps `snapshot_download` with
+  exponential-backoff tenacity retry (3 attempts, 5-10-20s backoff)
+  + `etag_timeout=10` to bound per-file head probes. Benefits every
+  slow+online test.
+- **`tests/integration/test_determinism_golden.py`** gains
+  `@pytest.mark.timeout(600)`. A silent network hang now surfaces
+  as a test failure with actionable output (audit observed 20m
+  workflow-timeout hang on Sprint 19 merge run 24747915467).
+
+**🟡 Minor — outlier-miner pool guard (F04).**
+
+- **`mining/outlier_miner.mine_outliers`** — raises `SwayError` when
+  the pool has fewer than `2·top_k` distinct scored prompts, with
+  an actionable `--top-k N` hint. Pre-fix: 1-distinct-prompt pool
+  produced `top=[p], bottom=[p]` (identical lists — no outlier
+  contrast). Guard applies AFTER scoring so unsupported probe kinds
+  still return the empty-result path.
+
+**🟡 Minor — autogen skipped-probes comment (F07).**
+
+- **`integrations/dlm/autogen.collect_skipped_probe_reasons`** — new
+  public helper returning `(probe_kind, reason)` tuples for probes
+  `_build_suite` intentionally omitted for the given handle.
+- **`_render_annotated_yaml`** — when `skipped` is non-empty, header
+  gains a `# skipped: <kind> (<reason>)` block. Users no longer have
+  to diff the autogen source to understand which probes are missing
+  from their generated `sway.yaml`.
+
+**🟡 Minor — CI Node.js 20 deprecation silence (F08).**
+
+- **`.github/workflows/ci.yml`** sets
+  `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"` at the workflow
+  level. Silences the Node 20 deprecation warnings each CI log
+  currently carries (deadline June 2026). Temporary until every
+  action we pull bumps to Node 24 natively.
+
+**🟡 Minor — portable `dlm_source` (F09).**
+
+- **`integrations/dlm/autogen._portable_dlm_source`** emits a
+  cwd-relative path when the `.dlm` lives inside the cwd, absolute
+  otherwise. The cwd-relative form survives cross-machine checkout
+  (CI agents, other devs); the old absolute-path emission broke the
+  moment a committed autogen'd YAML was run on a different host.
+
+**Other.**
+
+- **640 unit tests pass** (up from 626 before S21 — 14 new
+  regression tests across F02/F03/F04/F07/F09).
+- **Pragmatic deviations from original scope:** S21 was audit-scoped
+  to ~2 days of cleanup. Actual depth: 6 findings closed with 14
+  new regression tests. One existing test
+  (`test_std_floor_prevents_runaway_zscore`) explicitly rewritten to
+  flip its assertion — the pre-fix contract the test encoded WAS
+  the audit's reported bug.
+
 ### Sprint 19 — Pre-commit hook `sway gate`
 
 Closes Audit 01 stretch-list F-item "pre-commit hook sway gate." Ships
