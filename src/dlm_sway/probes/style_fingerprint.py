@@ -42,21 +42,14 @@ _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
 _WORD_RE = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
 _PUNCTS = set(".,:;!?-—()[]\"'/")
 
+#: Evidence schema version — bumped when dimensionality of the
+#: fingerprint changes so downstream consumers can branch on it.
+FINGERPRINT_SCHEMA_VERSION = 2
 
-def fingerprint(text: str) -> NDArray[np.float64]:
-    """Return a 6-dim stylistic fingerprint for ``text``.
 
-    Dimensions (all numeric, scaled to order-1):
-      0. mean sentence length (words)  / 30.0
-      1. std sentence length (words)   / 30.0
-      2. type-token ratio              (already in [0,1])
-      3. avg word length (chars)       / 10.0
-      4. punctuation density per char  * 10.0
-      5. paragraph density (1 / avg paragraph length in words) * 30.0
-    """
-    if not text.strip():
-        return np.zeros(6, dtype=np.float64)
-
+def _core_fingerprint(text: str) -> NDArray[np.float64]:
+    """The numpy-only 6-dim fingerprint. Always available, no optional
+    deps. Shared subroutine for both the base and the extended paths."""
     sentences = [s for s in _SENTENCE_SPLIT.split(text) if s.strip()]
     paragraphs = [p for p in _PARAGRAPH_SPLIT.split(text) if p.strip()]
     words = _WORD_RE.findall(text)
@@ -92,6 +85,130 @@ def fingerprint(text: str) -> NDArray[np.float64]:
     )
 
 
+def _has_style_extra() -> bool:
+    """Probe whether the ``style`` optional extra is installed.
+
+    Heuristic import of ``spacy`` and ``textstat``. The ``nlpaug``
+    package the extra also pulls is used elsewhere (paraphrase
+    augmentation, Sprint 05) — its presence isn't required for the
+    extended fingerprint.
+    """
+    import importlib.util
+
+    return (
+        importlib.util.find_spec("spacy") is not None
+        and importlib.util.find_spec("textstat") is not None
+    )
+
+
+def _extended_fingerprint(text: str) -> NDArray[np.float64] | None:
+    """Return the 9-dim extended fingerprint if spacy+textstat load, else None.
+
+    Three new dims on top of :func:`_core_fingerprint`:
+      6. passive-voice rate (POS pattern: NOUN VBN / total sentences) * 10.0
+      7. POS 4-gram entropy (shannon, in bits) / 10.0
+      8. syllables per word (textstat) / 5.0
+
+    Returns ``None`` on any import or model-load failure so the probe
+    can gracefully fall back to the 6-dim core. This path is only hit
+    once per ``StyleFingerprintProbe.run()`` call (two texts per call),
+    so the spaCy load cost is amortized across prompts.
+    """
+    try:
+        import spacy
+        import textstat
+    except ImportError:
+        return None
+
+    # The small English pipeline. A user who installs the ``style``
+    # extra is expected to run ``python -m spacy download en_core_web_sm``
+    # afterwards; if they haven't, we fall back to the 6-dim core.
+    try:
+        nlp = spacy.load("en_core_web_sm", disable=("ner", "lemmatizer"))
+    except (OSError, ImportError):
+        return None
+
+    doc = nlp(text)
+    sentences = list(doc.sents)
+    if not sentences:
+        return np.zeros(9, dtype=np.float64)
+
+    passive_sentences = 0
+    pos_tags: list[str] = []
+    for sent in sentences:
+        tags = [tok.pos_ for tok in sent if not tok.is_space]
+        pos_tags.extend(tags)
+        # "NOUN VBN" pattern via POS bigram. VBN = past participle;
+        # spaCy's coarse POS uses "VERB" with morph feature. Fall back
+        # to the ``Tag`` attribute which exposes Penn-style VBN directly.
+        for i in range(len(sent) - 1):
+            if sent[i].pos_ in ("NOUN", "PROPN") and sent[i + 1].tag_ == "VBN":
+                passive_sentences += 1
+                break
+
+    passive_rate = passive_sentences / len(sentences)
+
+    # POS 4-gram Shannon entropy (in bits). Capped at a reasonable
+    # maximum so the normalized dim stays ~order-1.
+    pos_entropy_bits = 0.0
+    if len(pos_tags) >= 4:
+        import math
+        from collections import Counter
+
+        four_grams = [tuple(pos_tags[i : i + 4]) for i in range(len(pos_tags) - 3)]
+        counts = Counter(four_grams)
+        total = sum(counts.values())
+        pos_entropy_bits = -sum(
+            (c / total) * math.log2(c / total) for c in counts.values()
+        )
+
+    syllables_per_word = float(textstat.syllable_count(text)) / max(len(pos_tags), 1)
+
+    return np.concatenate(
+        [
+            _core_fingerprint(text),
+            np.asarray(
+                [
+                    passive_rate * 10.0,
+                    pos_entropy_bits / 10.0,
+                    syllables_per_word / 5.0,
+                ],
+                dtype=np.float64,
+            ),
+        ]
+    )
+
+
+def fingerprint(text: str, *, extended: bool = False) -> NDArray[np.float64]:
+    """Return a stylistic fingerprint for ``text``.
+
+    With ``extended=False`` (the default) returns the 6-dim numpy-only
+    fingerprint. With ``extended=True`` and the ``style`` extra
+    installed, returns a 9-dim vector with passive-voice rate, POS
+    4-gram entropy, and syllables/word density appended. Falls back
+    to 6-dim when spaCy or textstat aren't importable so probe-level
+    callers never need to guard the import themselves.
+
+    Dimensions (all numeric, scaled to order-1):
+      0. mean sentence length (words)  / 30.0
+      1. std sentence length (words)   / 30.0
+      2. type-token ratio              (already in [0,1])
+      3. avg word length (chars)       / 10.0
+      4. punctuation density per char  * 10.0
+      5. paragraph density (1 / avg paragraph length in words) * 30.0
+      6. (extended) passive-voice rate per sentence * 10.0
+      7. (extended) POS 4-gram entropy (bits) / 10.0
+      8. (extended) syllables per word / 5.0
+    """
+    if not text.strip():
+        return np.zeros(9 if extended else 6, dtype=np.float64)
+    if extended:
+        ext = _extended_fingerprint(text)
+        if ext is not None:
+            return ext
+    return _core_fingerprint(text)
+
+
 class StyleFingerprintSpec(ProbeSpec):
     kind: Literal["style_fingerprint"] = "style_fingerprint"
     prompts: list[str] = Field(default_factory=list)
@@ -108,6 +225,19 @@ class StyleFingerprintSpec(ProbeSpec):
     assert_z_gte: float = 3.0
     """Z-score pass criterion against the null-adapter baseline, when it
     exists. Preferred over the raw threshold."""
+    extended: Literal["auto", "on", "off"] = "auto"
+    """Controls whether to use the 9-dim extended fingerprint
+    (passive-voice rate, POS 4-gram entropy, syllable density).
+
+    - ``"auto"`` (default) — use extended when the ``style`` extra is
+      installed (spacy + textstat importable), else the 6-dim core.
+    - ``"on"`` — require extended; SKIP if deps missing.
+    - ``"off"`` — always use the 6-dim core, regardless of installed deps.
+
+    Turning extended on changes the dimensionality of ``evidence["base_fp"]``
+    / ``["ft_fp"]`` / ``["doc_fp"]`` from 6 to 9. Snapshot-test consumers
+    should branch on ``evidence["schema_version"]`` rather than hardcode a
+    length."""
 
 
 class StyleFingerprintProbe(Probe):
@@ -148,6 +278,26 @@ class StyleFingerprintProbe(Probe):
                 message="no doc_reference (inline or from ctx.doc_text)",
             )
 
+        # Resolve whether to use the 9-dim extended fingerprint.
+        if spec.extended == "on":
+            if not _has_style_extra():
+                return ProbeResult(
+                    name=spec.name,
+                    kind=spec.kind,
+                    verdict=Verdict.SKIP,
+                    score=None,
+                    message=(
+                        "extended=on requires the [style] extra "
+                        "(pip install 'dlm-sway[style]' + "
+                        "'python -m spacy download en_core_web_sm')"
+                    ),
+                )
+            use_extended = True
+        elif spec.extended == "off":
+            use_extended = False
+        else:  # "auto"
+            use_extended = _has_style_extra()
+
         base_samples: list[str] = []
         ft_samples: list[str] = []
         for prompt in spec.prompts:
@@ -160,9 +310,9 @@ class StyleFingerprintProbe(Probe):
                     f.generate(prompt, max_new_tokens=spec.max_new_tokens, seed=ctx.seed)
                 )
 
-        base_fp = fingerprint("\n".join(base_samples))
-        ft_fp = fingerprint("\n".join(ft_samples))
-        doc_fp = fingerprint(doc_text)
+        base_fp = fingerprint("\n".join(base_samples), extended=use_extended)
+        ft_fp = fingerprint("\n".join(ft_samples), extended=use_extended)
+        doc_fp = fingerprint(doc_text, extended=use_extended)
 
         # B4 fix: a degenerate ft fingerprint (all-empty generations →
         # zeros) used to coincidentally produce a positive cosine shift
@@ -183,6 +333,8 @@ class StyleFingerprintProbe(Probe):
                     "doc_fp": doc_fp.tolist(),
                     "ft_text_is_empty": ft_text_is_empty,
                     "ft_fp_is_zero": ft_is_zero,
+                    "extended": use_extended,
+                    "schema_version": FINGERPRINT_SCHEMA_VERSION,
                     "weight": spec.weight,
                 },
                 message=(
@@ -225,6 +377,8 @@ class StyleFingerprintProbe(Probe):
                 "ft_fp": ft_fp.tolist(),
                 "doc_fp": doc_fp.tolist(),
                 "style_shift": shift,
+                "extended": use_extended,
+                "schema_version": FINGERPRINT_SCHEMA_VERSION,
                 "weight": spec.weight,
             },
             message=message,
