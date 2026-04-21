@@ -581,6 +581,86 @@ def report_cmd(
     report.to_terminal(suite, score, console=Console())
 
 
+class CompareFormat(StrEnum):
+    """Allowed values for ``sway compare --format``."""
+
+    TERMINAL = "terminal"
+    MARKDOWN = "md"
+    MARKDOWN_LONG = "markdown"  # alias kept for muscle memory
+    JSON = "json"
+
+
+def compare_cmd(
+    result_jsons: Annotated[
+        list[Path],
+        typer.Argument(help="Two or more saved result JSONs, in chronological order."),
+    ],
+    format: Annotated[
+        CompareFormat,
+        typer.Option(
+            "--format",
+            help="Output format: terminal, md (alias: markdown), or json.",
+        ),
+    ] = CompareFormat.TERMINAL,
+    fail_on_regression: Annotated[
+        float,
+        typer.Option(
+            "--fail-on-regression",
+            help=(
+                "Exit non-zero when any probe's score in the newest run dropped "
+                "by ≥ this threshold vs the previous run. 0 disables the gate."
+            ),
+        ),
+    ] = 0.0,
+) -> None:
+    """Compare N saved runs side-by-side (regression dashboard).
+
+    Rehydrates each JSON via :func:`report.from_json`, folds the runs
+    into a :class:`CompareMatrix`, and renders the score table + delta
+    columns + composite timeline. Intended for CI: point at a history
+    directory (``sway-history/*.json``) and pipe the output into the
+    build's log, or set ``--fail-on-regression`` to make the build red
+    on a real drop.
+    """
+    from dlm_sway.suite import compare, report
+
+    if len(result_jsons) < 2:
+        typer.echo("sway compare: need at least two result JSONs", err=True)
+        raise typer.Exit(code=2)
+
+    pairs: list[tuple[SuiteResult, SwayScore]] = []
+    labels: list[str] = []
+    for path in result_jsons:
+        try:
+            raw: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            typer.echo(f"sway compare: cannot read {path}: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        pairs.append(report.from_json(raw))
+        # Short label — the filename without the ``.json`` suffix.
+        labels.append(path.stem)
+
+    matrix = compare.build_matrix(pairs, labels=labels)
+
+    if format is CompareFormat.JSON:
+        typer.echo(compare.render_json(matrix, regression_threshold=fail_on_regression))
+    elif format in (CompareFormat.MARKDOWN, CompareFormat.MARKDOWN_LONG):
+        typer.echo(compare.render_markdown(matrix, regression_threshold=fail_on_regression))
+    else:
+        compare.render_terminal(
+            matrix,
+            console=Console(),
+            regression_threshold=fail_on_regression,
+        )
+
+    # Exit-code gate: any probe whose last-run delta is ≤ -threshold is a
+    # regression. ``fail_on_regression=0`` disables the gate entirely.
+    if fail_on_regression > 0.0:
+        regressions = matrix.latest_regressions(fail_on_regression)
+        if regressions:
+            raise typer.Exit(code=1)
+
+
 # -- helpers -----------------------------------------------------------
 
 
