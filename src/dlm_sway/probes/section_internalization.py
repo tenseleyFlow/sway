@@ -31,9 +31,9 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
-from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.core.scoring import ScoringBackend
 from dlm_sway.core.sections import Section, SectionKind
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._zscore import (
     no_calibration_note,
     score_from_z,

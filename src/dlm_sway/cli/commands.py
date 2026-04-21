@@ -725,10 +725,7 @@ def trace_cmd(
     trace_file: Annotated[
         Path,
         typer.Argument(
-            help=(
-                "Path to a forward-pass trace JSONL produced by "
-                "`sway run --trace <path>`."
-            ),
+            help=("Path to a forward-pass trace JSONL produced by `sway run --trace <path>`."),
         ),
     ],
     format: Annotated[
