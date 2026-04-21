@@ -117,8 +117,7 @@ def _check_finite_array(name: str, arr: NDArray[np.float64]) -> None:
         n_bad = int(np.sum(~np.isfinite(arr)))
         raise ProbeError(
             "divergence",
-            f"{name} contains {n_bad} non-finite entry/entries — "
-            f"refusing to compute divergence",
+            f"{name} contains {n_bad} non-finite entry/entries — refusing to compute divergence",
         )
 
 

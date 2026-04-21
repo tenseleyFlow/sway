@@ -91,9 +91,7 @@ def test_nan_adapter_on_disk_is_reproducibly_nan(nan_adapter: Path) -> None:
     assert at_least_one_nan, "no lora_A/lora_B tensors found — adapter structure unexpected"
 
 
-def test_hf_backend_preflight_rejects_nan_adapter(
-    tiny_model_dir: Path, nan_adapter: Path
-) -> None:
+def test_hf_backend_preflight_rejects_nan_adapter(tiny_model_dir: Path, nan_adapter: Path) -> None:
     """The HF backend's preflight catches the NaN adapter at construction time.
 
     Before S01 this ran to completion and produced JS = 13.247 nats.

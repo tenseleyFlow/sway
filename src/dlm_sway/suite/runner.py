@@ -77,8 +77,7 @@ def run(
                     verdict=Verdict.ERROR,
                     score=None,
                     message=(
-                        f"backend preflight failed — suite aborted before any "
-                        f"probe ran. {reason}"
+                        f"backend preflight failed — suite aborted before any probe ran. {reason}"
                     ),
                     duration_s=duration,
                     evidence={"preflight_reason": reason},
