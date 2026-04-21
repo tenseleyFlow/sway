@@ -215,7 +215,12 @@ class HuggingFaceDifferentialBackend:
         torch, transformers, peft = _require_hf()
         self._torch = torch
         self._spec = base_spec
-        self._adapter_path = Path(adapter_path).expanduser().resolve()
+        # Path normalization lives in ``ModelSpec.adapter`` (B22). When
+        # the backend is constructed via ``backends.build``, the value
+        # is already absolute. Direct constructions (some tests) may
+        # pass a relative path, so ``Path(...).resolve()`` stays as a
+        # cheap idempotent fallback.
+        self._adapter_path = Path(adapter_path).resolve()
 
         device_str: Device = (
             _detect_device() if base_spec.device == "auto" else base_spec.device  # type: ignore[assignment]
