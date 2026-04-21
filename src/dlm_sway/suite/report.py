@@ -276,6 +276,9 @@ def _probe_to_jsonable(r: ProbeResult) -> dict[str, Any]:
         "evidence": r.evidence,
         "message": r.message,
         "duration_s": r.duration_s,
+        # S14: bootstrap 95% CI on ``raw``. Serialized as a two-list
+        # [lo, hi] so JSON stays tuple-free (match numpy convention).
+        "ci_95": list(r.ci_95) if r.ci_95 is not None else None,
     }
 
 
@@ -307,6 +310,15 @@ def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
         # well-defined zero so wall-time displays as 0.00s.
         return datetime.fromtimestamp(0).astimezone()
 
+    def _ci_95(v: Any) -> tuple[float, float] | None:
+        if v is None:
+            return None
+        try:
+            lo, hi = v
+            return (float(lo), float(hi))
+        except (TypeError, ValueError):
+            return None
+
     probes = tuple(
         ProbeResult(
             name=p["name"],
@@ -320,6 +332,7 @@ def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
             evidence=dict(p.get("evidence") or {}),
             message=p.get("message", ""),
             duration_s=float(p.get("duration_s", 0.0)),
+            ci_95=_ci_95(p.get("ci_95")),
         )
         for p in raw.get("probes", [])
     )
