@@ -14,16 +14,16 @@
 | attribution | 0.30 | 0.35 |  |
 | calibration | 0.50 | 0.20 |  |
 | ablation | 0.00 | 0.15 |  |
-| baseline | 1.00 | 0.00 | (informational) |
+| baseline | 1.00 | 0.00 | (informational, weight=0) |
 
 ## Probes
 
-| name | kind | verdict | score | z | note |
-|---|---|---|---:|---:|---|
-| dk | `delta_kl` | pass | 0.87 | +5.12σ | mean js=0.4560, z=+5.12σ vs null |
-| sis | `section_internalization` | fail | 0.30 | +0.50σ | 1/4 sections cleared effective_sis≥0.05 |
-| lk | `leakage` | skip | — | — | no PROSE sections to test for leakage |
-| ablation | `adapter_ablation` | error | — | — | backend does not implement ScalableDifferentialBackend |
+| name | kind | verdict | score | raw | z | duration | note |
+|---|---|---|---:|---:|---:|---:|---|
+| dk | `delta_kl` | pass | 0.87 | 0.456 | +5.12σ | 0.12s | mean js=0.4560, z=+5.12σ vs null |
+| sis | `section_internalization` | fail | 0.30 | 0.012 | +0.50σ | 0.46s | 1/4 sections cleared effective_sis≥0.05 |
+| lk | `leakage` | skip | — | — | — | 0.00s | no PROSE sections to test for leakage |
+| ablation | `adapter_ablation` | error | — | — | — | 0.00s | backend does not implement ScalableDifferentialBackend |
 
 ## Top findings
 

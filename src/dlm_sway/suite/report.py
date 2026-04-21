@@ -15,6 +15,8 @@ integrates with existing test dashboards with no extra glue.
 from __future__ import annotations
 
 import json
+import math
+import re
 import xml.etree.ElementTree as ET
 from io import StringIO
 from typing import Any
@@ -34,6 +36,78 @@ _VERDICT_STYLE = {
     Verdict.ERROR: "bold magenta",
 }
 
+#: Sentinel character all renderers use for "no numeric value available."
+#: Single source prevents drift between surfaces (terminal vs markdown
+#: vs JSON downstream consumers that copy the rendered strings).
+_NONE_GLYPH = "—"
+
+
+# -- unified number formatters (S06.10) --------------------------------
+#
+# Every surface that prints a number routes through one of these. A
+# tests snapshot that locks report output catches any drift before it
+# ships. Typing is wide (``float | int | None``) so callers don't have
+# to special-case ``None`` at every site.
+
+
+def format_score(v: float | int | None) -> str:
+    """Two-decimal score, ``—`` when missing or non-finite."""
+    if v is None or not math.isfinite(float(v)):
+        return _NONE_GLYPH
+    return f"{float(v):.2f}"
+
+
+def format_raw(v: float | int | None) -> str:
+    """Three-decimal raw metric, ``—`` when missing or non-finite.
+
+    Uses thousands separators at magnitude ≥ 1 000 so half-life outputs
+    from ``prompt_collapse`` don't render as ``1945.473`` (hard to eyeball).
+    """
+    if v is None or not math.isfinite(float(v)):
+        return _NONE_GLYPH
+    return f"{float(v):,.3f}"
+
+
+def format_z(v: float | int | None) -> str:
+    """Signed z-score with ``σ`` suffix and thousands separator, ``—`` on None."""
+    if v is None or not math.isfinite(float(v)):
+        return _NONE_GLYPH
+    return f"{float(v):+,.2f}σ"
+
+
+def format_duration_s(v: float | int | None) -> str:
+    """Wall-time display. ``1.23s`` for sub-second, ``12.3s`` above 10, ``—`` on None."""
+    if v is None or not math.isfinite(float(v)):
+        return _NONE_GLYPH
+    f = float(v)
+    if f < 10.0:
+        return f"{f:.2f}s"
+    if f < 100.0:
+        return f"{f:.1f}s"
+    return f"{f:,.0f}s"
+
+
+# -- extras-rollup helpers (S06.6) -------------------------------------
+
+_MISSING_EXTRA_RE = re.compile(r"install the \[([^\]]+)\] extra", re.IGNORECASE)
+
+
+def collect_missing_extras(suite: SuiteResult) -> list[str]:
+    """Parse SKIP messages for ``install the [X] extra`` hints.
+
+    Returns a deduplicated, sorted list of extra names that would
+    unskip probes. ``BackendNotAvailableError`` formats messages with
+    ``install the [<extra>] extra`` so we can lift them out without
+    wiring a new field through.
+    """
+    found: set[str] = set()
+    for p in suite.probes:
+        if p.verdict != Verdict.SKIP or not p.message:
+            continue
+        for match in _MISSING_EXTRA_RE.finditer(p.message):
+            found.add(match.group(1))
+    return sorted(found)
+
 
 def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None = None) -> None:
     """Render the report to a rich Console (stdout by default)."""
@@ -51,7 +125,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     c.print(
         Text.assemble(
             ("overall: ", "bold"),
-            (f"{score.overall:.2f}", _score_style(score.overall)),
+            (format_score(score.overall), _score_style(score.overall)),
             ("  ", ""),
             (f"[ {score.band} ]", _band_style(score.band)),
         )
@@ -68,14 +142,15 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             continue
         v = score.components[cat]
         weight = score.weights.get(cat, 0.0)
-        # A zero-weight category contributes nothing to the composite;
-        # label it so users don't mistake the visible bar for judgment.
-        label = "(informational)" if weight == 0.0 else ""
-        comp_table.add_row(cat, f"{v:.2f}", _bar(v), label)
+        # S03 / B18: a zero-weight category contributes nothing to the
+        # composite; label explicitly so users don't mistake the visible
+        # bar for judgment.
+        label = "(informational, weight=0)" if weight == 0.0 else ""
+        comp_table.add_row(cat, format_score(v), _bar(v), label)
     c.print(comp_table)
 
     c.print()
-    # Per-probe detail
+    # Per-probe detail.
     detail = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
     detail.add_column("name", style="cyan")
     detail.add_column("kind", style="dim")
@@ -83,16 +158,19 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     detail.add_column("score", justify="right")
     detail.add_column("raw", justify="right")
     detail.add_column("z", justify="right")
-    detail.add_column("note", style="dim")
+    # D15: let Rich wrap long messages instead of hard-truncating at 80
+    # chars with an ellipsis. ``overflow="fold"`` + ``no_wrap=False``
+    # preserves the full text across multiple terminal lines.
+    detail.add_column("note", style="dim", overflow="fold", no_wrap=False)
     for r in suite.probes:
         detail.add_row(
             r.name,
             r.kind,
             Text(r.verdict.value, style=_VERDICT_STYLE[r.verdict]),
-            f"{r.score:.2f}" if r.score is not None else "—",
-            f"{r.raw:.3f}" if r.raw is not None else "—",
-            f"{r.z_score:+.2f}σ" if r.z_score is not None else "—",
-            (r.message[:80] + "…") if len(r.message) > 80 else r.message,
+            format_score(r.score),
+            format_raw(r.raw),
+            format_z(r.z_score),
+            Text(r.message or ""),
         )
     c.print(detail)
 
@@ -102,11 +180,26 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
         for i, f in enumerate(score.findings, start=1):
             c.print(f"  {i}. {f}")
 
+    # D3: missing-extras rollup. When probes SKIPped because their
+    # backend extras aren't installed, collapse the hints into one
+    # actionable footer rather than forcing the user to scan per-row.
+    extras = collect_missing_extras(suite)
+    if extras:
+        c.print()
+        skipped_ct = sum(1 for p in suite.probes if p.verdict == Verdict.SKIP)
+        c.print(
+            Text(
+                f"{skipped_ct} probe(s) skipped due to missing extras: "
+                f"pip install 'dlm-sway[{','.join(extras)}]'",
+                style="dim",
+            )
+        )
+
     c.print()
-    footer = f"wall: {suite.wall_seconds:.2f}s  |  sway {suite.sway_version}"
+    footer_parts = [f"wall: {format_duration_s(suite.wall_seconds)}", f"sway {suite.sway_version}"]
     if suite.determinism is not None:
-        footer += f"  |  det: {suite.determinism.class_} (seed={suite.determinism.seed})"
-    c.print(Text(footer, style="dim"))
+        footer_parts.append(f"det: {suite.determinism.class_} (seed={suite.determinism.seed})")
+    c.print(Text("  |  ".join(footer_parts), style="dim"))
 
 
 def to_json(suite: SuiteResult, score: SwayScore) -> str:
@@ -164,6 +257,83 @@ def _probe_to_jsonable(r: ProbeResult) -> dict[str, Any]:
     }
 
 
+def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
+    """Reconstruct a ``(SuiteResult, SwayScore)`` pair from saved JSON.
+
+    Inverse of :func:`to_json` for the fields the renderers consume.
+    Missing fields are tolerated — older snapshots predate
+    ``determinism`` and ``schema_version`` — so this helper stays
+    backward-compatible by default. ``sway report --format X`` uses
+    this so all four formats (terminal / md / junit / json) flow
+    through the same renderers as a fresh ``sway run`` (B16).
+    """
+    from datetime import datetime
+
+    from dlm_sway.core.result import (
+        DEFAULT_COMPONENT_WEIGHTS,
+        DeterminismReport,
+        ProbeResult,
+        SuiteResult,
+        SwayScore,
+        Verdict,
+    )
+
+    def _ts(s: str | None) -> datetime:
+        if s:
+            return datetime.fromisoformat(s)
+        # Snapshots that predate the field — give the renderer a
+        # well-defined zero so wall-time displays as 0.00s.
+        return datetime.fromtimestamp(0).astimezone()
+
+    probes = tuple(
+        ProbeResult(
+            name=p["name"],
+            kind=p["kind"],
+            verdict=Verdict(p["verdict"]),
+            score=p.get("score"),
+            raw=p.get("raw"),
+            z_score=p.get("z_score"),
+            base_value=p.get("base_value"),
+            ft_value=p.get("ft_value"),
+            evidence=dict(p.get("evidence") or {}),
+            message=p.get("message", ""),
+            duration_s=float(p.get("duration_s", 0.0)),
+        )
+        for p in raw.get("probes", [])
+    )
+
+    determinism: DeterminismReport | None = None
+    det_raw = raw.get("determinism")
+    if isinstance(det_raw, dict):
+        determinism = DeterminismReport(
+            class_=det_raw.get("class", "best_effort"),
+            seed=int(det_raw.get("seed", 0)),
+            notes=tuple(det_raw.get("notes") or ()),
+        )
+
+    suite = SuiteResult(
+        spec_path=raw.get("spec_path", ""),
+        started_at=_ts(raw.get("started_at")),
+        finished_at=_ts(raw.get("finished_at")),
+        base_model_id=raw.get("base_model_id", ""),
+        adapter_id=raw.get("adapter_id", ""),
+        sway_version=raw.get("sway_version", "?"),
+        probes=probes,
+        null_stats=dict(raw.get("null_stats") or {}),
+        determinism=determinism,
+    )
+
+    score_raw: dict[str, Any] = raw.get("score") or {}
+    score = SwayScore(
+        overall=float(score_raw.get("overall", 0.0)),
+        components=dict(score_raw.get("components") or {}),
+        weights=dict(score_raw.get("weights") or DEFAULT_COMPONENT_WEIGHTS),
+        band=score_raw.get("band", ""),
+        findings=tuple(score_raw.get("findings") or ()),
+    )
+    return suite, score
+
+
 def to_junit(suite: SuiteResult, score: SwayScore) -> str:
     """Serialize as JUnit XML. One ``<testcase>`` per probe."""
     testsuite = ET.Element(
@@ -201,13 +371,18 @@ def to_junit(suite: SuiteResult, score: SwayScore) -> str:
 
 
 def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
-    """A portable, CI-friendly markdown report."""
+    """A portable, CI-friendly markdown report.
+
+    The single source of the markdown emit (B16): both
+    ``sway run --markdown`` and ``sway report --format md`` route
+    through this function. No second ``_render_markdown_from_json``.
+    """
     buf = StringIO()
     buf.write("# sway report\n\n")
-    buf.write(f"**Overall:** {score.overall:.2f} (`{score.band}`)  \n")
+    buf.write(f"**Overall:** {format_score(score.overall)} (`{score.band}`)  \n")
     buf.write(f"**Base:** `{suite.base_model_id}`  \n")
     buf.write(f"**Adapter:** `{_adapter_label(suite.adapter_id)}`  \n")
-    buf.write(f"**Wall:** {suite.wall_seconds:.2f}s  \n")
+    buf.write(f"**Wall:** {format_duration_s(suite.wall_seconds)}  \n")
     if suite.determinism is not None:
         buf.write(
             f"**Determinism:** `{suite.determinism.class_}` (seed={suite.determinism.seed})  \n"
@@ -218,21 +393,40 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     buf.write("| category | score | weight | |\n|---|---:|---:|---|\n")
     for cat, v in score.components.items():
         weight = score.weights.get(cat, 0.0)
-        label = "(informational)" if weight == 0.0 else ""
-        buf.write(f"| {cat} | {v:.2f} | {weight:.2f} | {label} |\n")
+        label = "(informational, weight=0)" if weight == 0.0 else ""
+        buf.write(f"| {cat} | {format_score(v)} | {format_score(weight)} | {label} |\n")
+
+    # D9: markdown must reach parity with the terminal table — raw,
+    # z_score, duration_s all shown. Findings are appended as a section
+    # below so CI log consumers can see them without opening the JSON.
     buf.write("\n## Probes\n\n")
-    buf.write("| name | kind | verdict | score | z | note |\n|---|---|---|---:|---:|---|\n")
+    buf.write(
+        "| name | kind | verdict | score | raw | z | duration | note |\n"
+        "|---|---|---|---:|---:|---:|---:|---|\n"
+    )
     for r in suite.probes:
+        # Escape pipes in messages so markdown doesn't treat them as
+        # column separators. Leading/trailing whitespace collapsed.
+        note = (r.message or "").replace("|", "\\|").replace("\n", " ").strip()
         buf.write(
             f"| {r.name} | `{r.kind}` | {r.verdict.value} | "
-            f"{f'{r.score:.2f}' if r.score is not None else '—'} | "
-            f"{f'{r.z_score:+.2f}σ' if r.z_score is not None else '—'} | "
-            f"{r.message[:60]} |\n"
+            f"{format_score(r.score)} | {format_raw(r.raw)} | {format_z(r.z_score)} | "
+            f"{format_duration_s(r.duration_s)} | {note} |\n"
         )
+
     if score.findings:
         buf.write("\n## Top findings\n\n")
         for f in score.findings:
             buf.write(f"- {f}\n")
+
+    # D3: missing-extras rollup.
+    extras = collect_missing_extras(suite)
+    if extras:
+        skipped_ct = sum(1 for p in suite.probes if p.verdict == Verdict.SKIP)
+        buf.write("\n## Skipped probes\n\n")
+        buf.write(f"{skipped_ct} probe(s) skipped due to missing extras. Install with:\n\n")
+        buf.write(f"```\npip install 'dlm-sway[{','.join(extras)}]'\n```\n")
+
     return buf.getvalue()
 
 
@@ -240,11 +434,21 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
 
 
 def _adapter_label(adapter_id: str) -> str:
+    """Truncate the adapter path for display; quote when whitespace is present.
+
+    D14: a path containing spaces (``/Users/me/My Adapters/v1``) was
+    rendering ambiguously in the header. Quote it whenever any
+    whitespace appears so the trailing path is unmistakable.
+    """
     if not adapter_id:
         return "(base only)"
-    # Only the trailing path chunk is useful in the header.
     parts = adapter_id.rstrip("/").split("/")
-    return "/".join(parts[-3:]) if len(parts) > 3 else adapter_id
+    label = "/".join(parts[-3:]) if len(parts) > 3 else adapter_id
+    if any(ch.isspace() for ch in label):
+        # Use double quotes so the result drops cleanly into a CLI
+        # invocation if a user copy-pastes it.
+        return f'"{label}"'
+    return label
 
 
 def _score_style(v: float) -> str:
@@ -270,4 +474,15 @@ def _bar(v: float, *, width: int = 10) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-__all__ = ["to_terminal", "to_json", "to_junit", "to_markdown"]
+__all__ = [
+    "collect_missing_extras",
+    "format_duration_s",
+    "format_raw",
+    "format_score",
+    "format_z",
+    "from_json",
+    "to_json",
+    "to_junit",
+    "to_markdown",
+    "to_terminal",
+]

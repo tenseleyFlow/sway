@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -46,8 +47,21 @@ def run_cmd(
             ),
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Validate the spec, list the probes that would run with their "
+                "category, and exit 0 — no backend is built (D6)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Execute a suite and render a terminal report."""
+    if dry_run:
+        _print_dry_run(spec)
+        return
     try:
         weights_override = _parse_weights_flag(weights)
         result, score_obj = _execute_spec(spec, weights_override=weights_override)
@@ -66,6 +80,70 @@ def run_cmd(
     if markdown_out is not None:
         markdown_out.write_text(report.to_markdown(result, score_obj), encoding="utf-8")
         console.print(f"[dim]wrote markdown → {markdown_out}[/dim]")
+
+
+def _print_dry_run(spec_path: Path) -> None:
+    """D6: load + validate the spec, print the probe table, exit cleanly.
+
+    No backend construction — useful for fast feedback on spec edits
+    before paying for a model load.
+    """
+    from rich.table import Table
+
+    from dlm_sway.probes.base import build_probe, registry, validate_all_probes
+    from dlm_sway.suite.loader import load_spec
+
+    try:
+        spec = load_spec(spec_path)
+        validate_all_probes(spec.suite)
+    except SwayError as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=2) from exc
+
+    console = Console()
+    console.print(f"[bold]dry-run for {spec_path}[/bold] — {len(spec.suite)} probe(s)")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    table.add_column("#", style="dim")
+    table.add_column("name", style="cyan")
+    table.add_column("kind")
+    table.add_column("category", style="dim")
+    table.add_column("enabled", style="dim")
+    registered = registry()
+    for idx, raw in enumerate(spec.suite, start=1):
+        probe, probe_spec = build_probe(raw)
+        cls = registered.get(probe.kind)
+        category = cls.category if cls is not None else "?"
+        table.add_row(
+            str(idx),
+            probe_spec.name,
+            probe.kind,
+            category,
+            "yes" if probe_spec.enabled else "no",
+        )
+    console.print(table)
+
+
+def list_probes_cmd() -> None:
+    """List every shipped probe kind with its category + one-line summary (D6)."""
+    # Make sure every probe module has been imported and registered.
+    from rich.table import Table
+
+    import dlm_sway.probes  # noqa: F401
+    from dlm_sway.probes.base import registry
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    table.add_column("kind", style="cyan")
+    table.add_column("category", style="dim")
+    table.add_column("summary")
+    for kind in sorted(registry()):
+        cls = registry()[kind]
+        # First non-empty line of the docstring is the one-liner.
+        doc = (cls.__doc__ or "").strip()
+        summary = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        table.add_row(kind, cls.category, summary)
+    Console().print(table)
 
 
 def gate_cmd(
@@ -127,9 +205,66 @@ def gate_cmd(
     console.print(f"\n[green]gate passed[/green] — overall={score_obj.overall:.2f}")
 
 
+def _infer_base_from_adapter_config(adapter_dir: Path) -> str | None:
+    """Read ``base_model_name_or_path`` from ``adapter_config.json``.
+
+    Returns ``None`` when the file is missing, malformed, or doesn't
+    expose the field. Used by ``sway check`` to make ``--base`` optional
+    in the common case where PEFT already wrote the base id on training
+    (D4).
+    """
+    cfg_path = adapter_dir / "adapter_config.json"
+    if not cfg_path.exists():
+        return None
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    base = data.get("base_model_name_or_path")
+    if isinstance(base, str) and base:
+        return base
+    return None
+
+
+def _check_banner(score_obj: SwayScore, result: SuiteResult) -> tuple[str, str]:
+    """Compute the (text, rich-style) check verdict banner (D12).
+
+    Calibrated on the delta_kl z-score: ≥3σ is green ("above noise"),
+    ≥1σ is yellow ("marginal"), and below that is red. When no z-score
+    is available (no null calibration ran), falls back to the raw
+    score band.
+    """
+    z = next(
+        (p.z_score for p in result.probes if p.kind == "delta_kl" and p.z_score is not None),
+        None,
+    )
+    if z is not None:
+        if z >= 3.0:
+            return f"✅ adapter is {z:+.2f}σ above noise", "bold green"
+        if z >= 1.0:
+            return f"⚠️ adapter is {z:+.2f}σ above noise — marginal", "bold yellow"
+        return f"❌ adapter is {z:+.2f}σ — indistinguishable from noise", "bold red"
+
+    # Fallback: composite score band.
+    if score_obj.overall >= 0.6:
+        return f"✅ adapter scored {score_obj.overall:.2f} — looks healthy", "bold green"
+    if score_obj.overall >= 0.3:
+        return f"⚠️ adapter scored {score_obj.overall:.2f} — partial fit", "bold yellow"
+    return f"❌ adapter scored {score_obj.overall:.2f} — noise band", "bold red"
+
+
 def check_cmd(
     adapter: Annotated[Path, typer.Argument(help="Path to a PEFT adapter directory.")],
-    base: Annotated[str, typer.Option("--base", help="HuggingFace base model id or local path.")],
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base",
+            help=(
+                "HuggingFace base model id or local path. Inferred from "
+                "the adapter's ``adapter_config.json`` when omitted (D4)."
+            ),
+        ),
+    ] = None,
     prompts: Annotated[
         Path | None,
         typer.Option(
@@ -150,6 +285,22 @@ def check_cmd(
     from dlm_sway.suite.score import compute as compute_score
     from dlm_sway.suite.spec import SuiteDefaults, SuiteModels, SwaySpec
 
+    # D4: try to infer base model from adapter_config.json before
+    # erroring out on a missing --base.
+    if base is None:
+        inferred = _infer_base_from_adapter_config(adapter)
+        if inferred is None:
+            typer.secho(
+                f"error: --base not given and adapter at {adapter} doesn't carry a "
+                f"base_model_name_or_path in adapter_config.json. Pass --base "
+                f"explicitly.",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=2)
+        base = inferred
+        typer.secho(f"(inferred base model: {base})", err=True, fg=typer.colors.CYAN)
+
     quick_prompts = _load_prompts(prompts) if prompts else _BUILTIN_QUICK_PROMPTS
 
     base_spec = ModelSpec(base=base, kind="hf")
@@ -159,6 +310,9 @@ def check_cmd(
         models=SuiteModels(base=base_spec, ft=ft_spec),
         defaults=SuiteDefaults(seed=0),
         suite=[
+            # Calibrate first so delta_kl can publish a z-score the
+            # banner reads off.
+            {"name": "quick_null", "kind": "null_adapter", "runs": 3},
             {
                 "name": "quick_delta_kl",
                 "kind": "delta_kl",
@@ -183,7 +337,15 @@ def check_cmd(
     finally:
         _close_if_possible(backend)
     score_obj = compute_score(result)
-    report.to_terminal(result, score_obj, console=Console())
+
+    # D12: top-line banner before the full report so a user looking
+    # only at the first line still gets the verdict.
+    console = Console()
+    banner_text, banner_style = _check_banner(score_obj, result)
+    console.print()
+    console.print(banner_text, style=banner_style)
+    console.print()
+    report.to_terminal(result, score_obj, console=console)
 
 
 def diff_cmd(
@@ -221,12 +383,38 @@ def diff_cmd(
     console.print(f"[bold]overall[/bold]  A: {overall_a:.2f}   B: {overall_b:.2f}")
     console.print()
     console.print("[bold]per-probe[/bold] (A → B, Δ):")
+    regressed_small = 0  # |Δ| > 0.10 in the wrong direction
+    regressed_large = 0  # |Δ| > 0.20 in the wrong direction
     for name in sorted(per_a.keys() | per_b.keys()):
         a = per_a.get(name, 0.0)
         b = per_b.get(name, 0.0)
         delta = b - a
         sign = "+" if delta >= 0 else ""
         console.print(f"  {name:<30}  {a:.2f}  →  {b:.2f}   ({sign}{delta:+.2f})")
+        if delta < -0.10:
+            regressed_small += 1
+        if delta < -0.20:
+            regressed_large += 1
+
+    # D13: regression summary line. The audit's example phrasing was
+    # "A→B: 3 probes regressed >0.10, 1 regressed >0.20, composite Δ=+0.02".
+    # Color cue tracks the composite delta: green for any improvement,
+    # red on regression, yellow on flat-with-regressions.
+    composite_delta = overall_b - overall_a
+    if composite_delta > 0.0:
+        summary_style = "bold green"
+    elif regressed_small or regressed_large:
+        summary_style = "bold red" if composite_delta < 0.0 else "bold yellow"
+    else:
+        summary_style = "dim"
+
+    console.print()
+    console.print(
+        f"A→B: {regressed_small} probe(s) regressed >0.10, "
+        f"{regressed_large} regressed >0.20, "
+        f"composite Δ={composite_delta:+.2f}",
+        style=summary_style,
+    )
 
 
 def autogen_cmd(
@@ -258,56 +446,128 @@ def autogen_cmd(
     typer.echo(f"wrote {out}")
 
 
-def doctor_cmd() -> None:
-    """Print backend availability and version info."""
-    console = Console()
-    console.print(f"[bold]sway[/bold] {__version__}")
-    console.print(f"  python:    {sys.version.split()[0]}")
-    console.print(f"  platform:  {sys.platform}")
-    console.print()
+_DOCTOR_BACKENDS: dict[str, tuple[str, ...]] = {
+    "hf": ("torch", "transformers", "peft"),
+    "mlx": ("mlx", "mlx_lm"),
+    "semsim": ("sentence_transformers",),
+    "style": ("spacy", "textstat", "nlpaug"),
+    "dlm": ("dlm",),
+    "viz": ("matplotlib",),
+}
 
+
+def _doctor_payload() -> dict[str, Any]:
+    """Build the JSON-friendly doctor payload (used by both render paths)."""
+    extras: dict[str, dict[str, str | None]] = {}
+    for extra, modules in _DOCTOR_BACKENDS.items():
+        extras[extra] = {mod: _module_version(mod) for mod in modules}
+    return {
+        "sway_version": __version__,
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "extras": extras,
+    }
+
+
+def _module_version(name: str) -> str | None:
+    """Return the installed module's ``__version__`` string, or ``None``."""
+    import importlib
+
+    try:
+        mod = importlib.import_module(name)
+    except ImportError:
+        return None
+    return str(getattr(mod, "__version__", "installed"))
+
+
+def doctor_cmd(
+    json_out: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Emit a machine-readable JSON payload instead of the rich "
+                "terminal layout (D7). CI-grep-friendly."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Print backend availability and version info."""
+    payload = _doctor_payload()
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console = Console()
+    console.print(f"[bold]sway[/bold] {payload['sway_version']}")
+    console.print(f"  python:    {payload['python']}")
+    console.print(f"  platform:  {payload['platform']}")
+    console.print()
     console.print("[bold]backends[/bold]")
-    console.print(
-        f"  hf:        {_probe_import('torch')} {_probe_import('transformers')} {_probe_import('peft')}"
-    )
-    console.print(f"  mlx:       {_probe_import('mlx')} {_probe_import('mlx_lm')}")
-    console.print(f"  semsim:    {_probe_import('sentence_transformers')}")
-    console.print(
-        f"  style+:    {_probe_import('spacy')} {_probe_import('textstat')} {_probe_import('nlpaug')}"
-    )
-    console.print(f"  dlm:       {_probe_import('dlm')}")
-    console.print(f"  viz:       {_probe_import('matplotlib')}")
+    for extra, modules in payload["extras"].items():
+        parts = []
+        for mod, ver in modules.items():
+            if ver is None:
+                parts.append(f"[red]{mod}: missing[/red]")
+            else:
+                parts.append(f"[green]{mod}: {ver}[/green]")
+        console.print(f"  {extra:<8}  {' '.join(parts)}")
+
+
+class ReportFormat(StrEnum):
+    """Allowed values for ``sway report --format`` (D11).
+
+    Typer enforces the enum at parse time, so unknown formats produce
+    a clear ``Invalid value`` error instead of silently falling back
+    to the terminal renderer.
+    """
+
+    TERMINAL = "terminal"
+    MARKDOWN = "md"
+    MARKDOWN_LONG = "markdown"  # alias kept for muscle memory
+    JUNIT = "junit"
+    JSON = "json"
 
 
 def report_cmd(
     result_json: Annotated[Path, typer.Argument(help="Path to a saved result JSON.")],
     format: Annotated[
-        str, typer.Option("--format", help="Output format: terminal, md, junit, json.")
-    ] = "terminal",
+        ReportFormat,
+        typer.Option(
+            "--format",
+            help="Output format: terminal, md (alias: markdown), junit, or json.",
+        ),
+    ] = ReportFormat.TERMINAL,
 ) -> None:
-    """Re-render a previously saved run (for history tracking / dashboards)."""
+    """Re-render a previously saved run (for history tracking / dashboards).
+
+    The CLI deserializes the JSON back into the canonical
+    ``(SuiteResult, SwayScore)`` pair via :func:`report.from_json`,
+    then routes through the same renderers as a fresh ``sway run``.
+    Single source for every format keeps terminal / md / junit /
+    json output identical regardless of where they came from (B16).
+    """
+    from dlm_sway.suite import report
+
     raw: dict[str, Any] = json.loads(result_json.read_text(encoding="utf-8"))
-    fmt = format.lower()
-    if fmt == "json":
-        typer.echo(json.dumps(raw, indent=2, sort_keys=True))
+
+    if format is ReportFormat.JSON:
+        # Pass-through: the saved file *is* the canonical JSON. Re-emit
+        # via to_json against the round-tripped pair so any schema
+        # additions land consistently.
+        suite, score = report.from_json(raw)
+        typer.echo(report.to_json(suite, score))
         return
-    if fmt in {"md", "markdown"}:
-        # A file-level re-render needs the dataclasses back; simplest is
-        # to synthesize a minimal markdown from the JSON directly.
-        typer.echo(_render_markdown_from_json(raw))
+
+    suite, score = report.from_json(raw)
+    if format in (ReportFormat.MARKDOWN, ReportFormat.MARKDOWN_LONG):
+        typer.echo(report.to_markdown(suite, score))
         return
-    if fmt == "junit":
-        typer.echo(_render_junit_from_json(raw))
+    if format is ReportFormat.JUNIT:
+        typer.echo(report.to_junit(suite, score))
         return
-    # Default: terminal-ish one-liner summary.
-    score: dict[str, Any] = raw.get("score", {})
-    typer.echo(f"overall: {score.get('overall', 0.0):.2f}  [{score.get('band', '?')}]")
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    for p in probes:
-        typer.echo(
-            f"  {p['name']:<30}  {p['verdict']:<6}  "
-            f"{(p.get('score') or 0.0):.2f}  {p.get('message', '')[:60]}"
-        )
+    # ReportFormat.TERMINAL.
+    report.to_terminal(suite, score, console=Console())
 
 
 # -- helpers -----------------------------------------------------------
@@ -368,8 +628,26 @@ def _execute_spec(
             sections = handle.sections
             doc_text = handle.doc_text
         except ImportError:
-            # Honoring dlm_source is best-effort — probes that need
-            # sections will SKIP with a pointer at the extra.
+            # D8: don't silently swallow. The user wrote ``dlm_source``
+            # in their YAML expecting the bridge to populate sections;
+            # warn loudly so they know why downstream attribution
+            # probes are SKIPping.
+            typer.secho(
+                f"warning: spec sets dlm_source={spec.dlm_source!r} but the "
+                f"[dlm] extra is not installed — sections not provided "
+                f"(pip install 'dlm-sway[dlm]')",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+            sections = None
+        except SwayError as exc:
+            # The bridge imported but failed (no adapter, malformed
+            # .dlm, etc). Same surface — warn, don't crash the suite.
+            typer.secho(
+                f"warning: dlm_source={spec.dlm_source!r} did not resolve: {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
             sections = None
     if spec.defaults.differential:
         backend: Any = build_backend(spec.models.ft)
@@ -417,53 +695,3 @@ def _close_if_possible(backend: object) -> None:
     close = getattr(backend, "close", None)
     if callable(close):
         close()
-
-
-def _probe_import(name: str) -> str:
-    import importlib
-
-    try:
-        mod = importlib.import_module(name)
-    except ImportError:
-        return f"[red]{name}: missing[/red]"
-    ver = getattr(mod, "__version__", "installed")
-    return f"[green]{name}: {ver}[/green]"
-
-
-def _render_markdown_from_json(raw: dict[str, Any]) -> str:
-    score: dict[str, Any] = raw.get("score", {})
-    lines: list[str] = [
-        "# sway report",
-        "",
-        f"**Overall:** {score.get('overall', 0.0):.2f} (`{score.get('band', '?')}`)  ",
-        f"**Base:** `{raw.get('base_model_id', '?')}`  ",
-        f"**Adapter:** `{raw.get('adapter_id', '?')}`  ",
-        "",
-        "## Probes",
-        "",
-        "| name | kind | verdict | score |",
-        "|---|---|---|---:|",
-    ]
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    for p in probes:
-        lines.append(
-            f"| {p['name']} | `{p['kind']}` | {p['verdict']} | {(p.get('score') or 0.0):.2f} |"
-        )
-    return "\n".join(lines)
-
-
-def _render_junit_from_json(raw: dict[str, Any]) -> str:
-    """Minimal JUnit renderer from a saved JSON (useful for report --format junit)."""
-    import xml.etree.ElementTree as ET
-
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    testsuite = ET.Element("testsuite", {"name": "sway", "tests": str(len(probes))})
-    for p in probes:
-        tc = ET.SubElement(testsuite, "testcase", {"classname": p["kind"], "name": p["name"]})
-        if p["verdict"] == "fail":
-            ET.SubElement(tc, "failure", {"message": p.get("message", "")})
-        elif p["verdict"] == "error":
-            ET.SubElement(tc, "error", {"message": p.get("message", "")})
-        elif p["verdict"] == "skip":
-            ET.SubElement(tc, "skipped", {"message": p.get("message", "")})
-    return ET.tostring(testsuite, encoding="unicode")
