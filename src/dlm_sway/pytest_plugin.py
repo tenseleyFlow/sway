@@ -34,12 +34,17 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dlm_sway.core.errors import SwayError
-from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
+# F19 — heavy imports are deferred to call sites so pytest's plugin
+# discovery doesn't load ``dlm_sway.core.result`` (and everything below
+# it: pydantic, numpy) for users who haven't invoked
+# ``@pytest.mark.sway``. The plugin registers as ``pytest11`` on
+# install; the tax should only be paid by tests that actually use it.
 
 if TYPE_CHECKING:
     from _pytest.config import Config
     from _pytest.nodes import Item
+
+    from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore
 
 
 # ----------------------------------------------------------------------
@@ -124,7 +129,7 @@ def pytest_collection_modifyitems(config: Config, items: list[Item]) -> None:
             new_items.append(item)
             continue
         try:
-            spec_path, threshold, weights = _parse_mark(mark)
+            spec_path, threshold, weights = _parse_mark(mark, rootpath=config.rootpath)
         except _SwayMarkError as exc:
             # Surface the configuration error as a single failed item
             # so the user sees a green-field message in pytest's
@@ -159,6 +164,8 @@ class _SwayMarkError(Exception):
 
 def _parse_mark(
     mark: pytest.Mark,
+    *,
+    rootpath: Path,
 ) -> tuple[Path, float, dict[str, float] | None]:
     """Pull ``(spec_path, threshold, weights)`` out of a ``@pytest.mark.sway(...)``."""
     # ``mark.args`` + ``mark.kwargs`` together give the call shape.
@@ -174,10 +181,11 @@ def _parse_mark(
         raise _SwayMarkError("@pytest.mark.sway requires a `spec` kwarg or a positional spec path")
     spec_path = Path(spec)
     if not spec_path.is_absolute():
-        # Resolve against the config rootpath — the project root pytest
-        # discovers, the same one users edit from. Means the spec can
-        # sit next to the test file without a full absolute path.
-        spec_path = spec_path.resolve()
+        # Resolve against pytest's rootpath — the project root pytest
+        # discovers — not the process cwd. A user running ``pytest
+        # tests/`` from a subdir would otherwise see spec-relative
+        # paths resolved against the subdir, surprising.
+        spec_path = (rootpath / spec_path).resolve()
 
     threshold_raw = kwargs.pop("threshold", 0.0)
     try:
@@ -220,6 +228,7 @@ def _expand_to_probe_items(
     first item's ``runtest``. Collection stays fast; failures don't
     appear until `pytest` actually runs the test.
     """
+    from dlm_sway.core.errors import SwayError
     from dlm_sway.suite.loader import load_spec
 
     parent = parent_item.parent
@@ -390,6 +399,8 @@ def _find_probe(suite: SuiteResult, name: str) -> ProbeResult | None:
 
 def _apply_verdict(probe: ProbeResult) -> None:
     """Translate a probe's :class:`Verdict` to a pytest outcome."""
+    from dlm_sway.core.result import Verdict
+
     msg = probe.message or ""
     if probe.verdict == Verdict.PASS:
         return

@@ -57,22 +57,17 @@ def run(
     """
     started = utcnow()
 
-    # Sprint 07: concurrent_probes is scaffolding. The HF and MLX
+    # Sprint 07: ``concurrent_probes`` is scaffolding. The HF and MLX
     # backends declare ``safe_for_concurrent_views = False`` so the
-    # runner stays sequential below. When a future sprint builds the
-    # pool (see ``.docs/design/backend-concurrency.md``), flip the
-    # check to dispatch here; the spec field is already validated.
-    requested = spec.defaults.concurrent_probes
-    backend_safe = getattr(backend, "safe_for_concurrent_views", False)
-    if requested > 1 and not backend_safe:
-        import sys as _sys
-
-        print(
-            f"warning: spec requested concurrent_probes={requested} but "
-            f"{type(backend).__name__} is not concurrency-safe — running "
-            f"sequentially (see .docs/design/backend-concurrency.md)",
-            file=_sys.stderr,
-        )
+    # runner stays sequential below. The spec field is still validated
+    # + accepted (so a future pool can light up without a schema bump)
+    # but does nothing until the pool lands; see
+    # ``.docs/design/backend-concurrency.md``.
+    #
+    # DC4 (Audit 02) — the previous stderr warning fired every run
+    # with ``concurrent_probes>1`` even though execution was
+    # unchanged, which was noise for no benefit. The warning is
+    # reinstated by the sprint that wires the pool.
 
     # Seed every RNG sway's probes touch before any backend work runs.
     # ``strict=True`` asks torch for deterministic algorithms and sets
@@ -265,7 +260,13 @@ def _snapshot_backend_stats(backend: DifferentialBackend) -> dict[str, float | i
 
 
 def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:
-    """Return a copy of ``result`` with :attr:`ProbeResult.duration_s` set."""
+    """Return a copy of ``result`` with :attr:`ProbeResult.duration_s` set.
+
+    Every ``ProbeResult`` field must be forwarded explicitly — a dropped
+    field here silently returns ``None`` for the whole runner path, which
+    is how F01 (bootstrap ``ci_95`` stripped from every probe) landed
+    before the audit caught it.
+    """
     return ProbeResult(
         name=result.name,
         kind=result.kind,
@@ -278,6 +279,7 @@ def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:
         evidence=result.evidence,
         message=result.message,
         duration_s=duration,
+        ci_95=result.ci_95,
     )
 
 

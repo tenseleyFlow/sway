@@ -38,9 +38,12 @@ def _dist_sharp(seed_offset: int = 0) -> TokenDist:
 
 
 def _dist_broad() -> TokenDist:
-    """Broad distribution: uniform over top-k."""
+    """Broad distribution: uniform over top-k, with a tiny monotonic
+    perturbation so it clears ``_divergence``'s uniformity guard (a
+    literally-flat dist looks like a broken lm_head)."""
     k = 8
     lp = np.full(k, -math.log(k), dtype=np.float32)
+    lp += np.linspace(-1e-4, 1e-4, k, dtype=np.float32)
     residual = 1.0 - float(np.exp(lp).sum())
     tail = math.log(residual) if residual > 1e-12 else None
     return TokenDist(
@@ -157,7 +160,9 @@ class TestClusterKL:
 
     def test_uniform_adapter_fallback_to_half(self, monkeyed_embed: dict[str, np.ndarray]) -> None:
         """All prompts shifted identically → zero between-/within-variance
-        → specificity lands on the ``0.5`` fallback (not NaN)."""
+        → specificity lands on the ``0.5`` fallback (not NaN). F17: the
+        degenerate branch returns WARN with a ``degenerate_zero_variance``
+        marker and no z-score, not a spurious calibrated verdict."""
         prompts = [f"p-{i}" for i in range(8)]
         # Split embeddings across two centroids so k-means has a valid
         # partition; the divergence math is what drives the ratio.
@@ -180,6 +185,13 @@ class TestClusterKL:
         assert result.raw == pytest.approx(0.5, abs=1e-6)
         assert result.evidence["within_cluster_variance"] == pytest.approx(0.0)
         assert result.evidence["between_cluster_variance"] == pytest.approx(0.0)
+        # F17: degenerate case gets a WARN verdict + explicit evidence
+        # marker; no z-score is emitted (comparing a conventional 0.5
+        # to a null mean near 0.5 would produce spurious calibration).
+        assert result.verdict == Verdict.WARN
+        assert result.z_score is None
+        assert result.evidence["degenerate_zero_variance"] is True
+        assert "degenerate" in result.message.lower()
 
     def test_too_few_prompts_skips(self, monkeyed_embed: dict[str, np.ndarray]) -> None:
         del monkeyed_embed  # no embedding needed — SKIP short-circuits first
@@ -287,3 +299,92 @@ class TestMissingSemsim:
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.SKIP
         assert "semsim" in result.message
+
+    def test_skip_when_sklearn_import_fails(
+        self, monkeypatch: pytest.MonkeyPatch, monkeyed_embed: dict[str, np.ndarray]
+    ) -> None:
+        """Covers the ``_kmeans_cluster`` import-error SKIP branch directly.
+
+        The ``_load_embedder`` raise branch is tested above; this test
+        stubs ``_load_embedder`` to succeed and replaces
+        ``_kmeans_cluster`` with a raiser that mimics an uninstalled
+        sklearn. Before this test, the sklearn-missing SKIP path in
+        ``probes/cluster_kl.py`` was unreachable under any test — the
+        embedder raise always fired first.
+        """
+        from dlm_sway.core.errors import BackendNotAvailableError
+
+        for p in [f"p-{i}" for i in range(8)]:
+            monkeyed_embed[p] = np.array([1.0, 0.0], dtype=np.float32)
+
+        def sklearn_raiser(*_args: Any, **_kwargs: Any) -> Any:
+            raise BackendNotAvailableError(
+                "cluster_kl",
+                extra="semsim",
+                hint="cluster_kl needs scikit-learn for k-means clustering.",
+            )
+
+        monkeypatch.setattr(
+            "dlm_sway.probes.cluster_kl._kmeans_cluster",
+            sklearn_raiser,
+        )
+        probe = ClusterKLProbe()
+        spec = probe.spec_cls(
+            name="ck",
+            kind="cluster_kl",
+            prompts=[f"p-{i}" for i in range(8)],
+            num_clusters=2,
+            min_prompts=4,
+        )
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.SKIP
+        assert "semsim" in result.message
+        assert "scikit-learn" in result.message
+
+
+class TestRealKMeans:
+    """Exercise the actual ``sklearn.cluster.KMeans`` primitive.
+
+    Every other test in this file monkeypatches ``_kmeans_cluster`` with
+    an argmax stub so suites can run in CI environments without the
+    ``[semsim]`` extra installed. That leaves the real sklearn path —
+    the probe's entire reason for existing — uncovered. The tests here
+    skip when sklearn isn't available and execute the real import
+    otherwise.
+    """
+
+    def test_real_kmeans_separates_two_gaussians(self) -> None:
+        """Two clearly-separated clusters → k-means recovers the correct
+        partition with a fixed seed."""
+        pytest.importorskip("sklearn")
+        from dlm_sway.probes.cluster_kl import _kmeans_cluster
+
+        rng = np.random.default_rng(0)
+        # Cluster A centered at (0, 0); cluster B centered at (5, 0).
+        group_a = rng.normal(loc=0.0, scale=0.5, size=(8, 2)).astype(np.float32)
+        group_b = rng.normal(loc=(5.0, 0.0), scale=0.5, size=(8, 2)).astype(np.float32)
+        embeddings = np.vstack([group_a, group_b])
+        labels = _kmeans_cluster(embeddings, k=2, seed=0)
+        assert labels.shape == (16,)
+        # All-A should share a label; all-B should share the other.
+        label_a = set(labels[:8].tolist())
+        label_b = set(labels[8:].tolist())
+        assert len(label_a) == 1
+        assert len(label_b) == 1
+        assert label_a != label_b
+
+    def test_real_kmeans_seed_is_deterministic(self) -> None:
+        """Two runs with the same seed → identical label vectors. Pins
+        the determinism contract in a way that the argmax stub can't.
+        """
+        pytest.importorskip("sklearn")
+        from dlm_sway.probes.cluster_kl import _kmeans_cluster
+
+        rng = np.random.default_rng(0)
+        embeddings = rng.normal(size=(20, 4)).astype(np.float32)
+        labels_a = _kmeans_cluster(embeddings, k=3, seed=42)
+        labels_b = _kmeans_cluster(embeddings, k=3, seed=42)
+        assert np.array_equal(labels_a, labels_b)

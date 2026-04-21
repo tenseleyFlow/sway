@@ -95,7 +95,7 @@ class ClusterKLSpec(ProbeSpec):
 
 
 class ClusterKLProbe(Probe):
-    """Clustered-KL probe — see module docstring."""
+    """F8 ClusterKL — distribution-shift specificity via clustered KL."""
 
     kind = "cluster_kl"
     spec_cls = ClusterKLSpec
@@ -230,12 +230,48 @@ class ClusterKLProbe(Probe):
         # etc.), specificity is mathematically undefined. Convention:
         # 0.5 — the null-adapter expectation — so downstream z-score
         # path reports "no signal" rather than a runtime NaN.
-        specificity = between_variance / denom if denom > 0.0 else 0.5
+        degenerate = denom <= 0.0
+        specificity = between_variance / denom if not degenerate else 0.5
         mean_kl = statistics.fmean(divergences)
 
         # Bootstrap CI on specificity: resample per-prompt
         # (divergence, label) pairs and recompute the ratio.
         ci_95 = _bootstrap_specificity(divergences, labels, ctx.seed, spec.num_clusters)
+
+        # F17 — the degenerate fallback short-circuits the z-score
+        # path. Comparing a conventional 0.5 to a null whose mean is
+        # marginally off-center (small-N sampling noise) would produce
+        # a spurious non-zero z that downstream consumers might act
+        # on. Force "no signal" semantics with a single WARN verdict.
+        if degenerate:
+            message = (
+                f"specificity=0.50 (k={spec.num_clusters}) — degenerate: "
+                f"zero within/between variance (no per-prompt spread)"
+            )
+            return safe_finalize(
+                name=spec.name,
+                kind=spec.kind,
+                verdict=Verdict.WARN,
+                score=0.0,
+                raw=specificity,
+                z_score=None,
+                evidence={
+                    "num_clusters": spec.num_clusters,
+                    "num_prompts": len(spec.prompts),
+                    "divergence_kind": spec.divergence,
+                    "mean_kl": mean_kl,
+                    "within_cluster_variance": within_variance,
+                    "between_cluster_variance": between_variance,
+                    "per_cluster_size": per_cluster_size,
+                    "per_cluster_mean_kl": per_cluster_mean_kl,
+                    "cluster_exemplars": cluster_exemplars,
+                    "weight": spec.weight,
+                    "degenerate_zero_variance": True,
+                    "raw_ci_95": list(ci_95) if ci_95 is not None else None,
+                },
+                message=message,
+                ci_95=ci_95,
+            )
 
         # Null calibration: specificity on noise ≈ 0.5 ± small.
         stats = get_null_stats(ctx, spec.kind)

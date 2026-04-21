@@ -177,6 +177,14 @@ class NullAdapterProbe(Probe):
             # Pre-S10 cache entries only have ``null_stats`` (implicit
             # single-rank). Promote them into the new shape so repeated
             # runs benefit from the existing cache.
+            #
+            # DC3 (Audit 02) — this branch is legacy compatibility and
+            # will be removed in the next minor version bump. After S10
+            # shipped, every newly-written cache carries
+            # ``null_stats_by_rank``; promoted entries get rewritten on
+            # the first full recalibration. We keep this shim for one
+            # release cycle to avoid stranding users whose cache files
+            # predate S10.
             if cached is not None and "null_stats" in cached:
                 promoted = dict(cached)
                 promoted["null_stats_by_rank"] = {

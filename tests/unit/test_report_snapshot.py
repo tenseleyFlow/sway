@@ -48,6 +48,7 @@ def _fixture_suite_and_score() -> tuple[SuiteResult, SwayScore]:
             evidence={"divergence_kind": "js", "num_prompts": 4, "weight": 1.0},
             message="mean js=0.4560, z=+5.12σ vs null",
             duration_s=0.123,
+            ci_95=(0.412, 0.497),
         ),
         ProbeResult(
             name="sis",

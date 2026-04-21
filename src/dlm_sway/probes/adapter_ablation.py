@@ -21,6 +21,16 @@ provides — sway's position next to the adapter math makes it possible.
 Requires the backend to implement
 :class:`~dlm_sway.core.scoring.ScalableDifferentialBackend`. Probes
 SKIP gracefully on backends that don't.
+
+**On the missing ``ci_95`` column.** S14's bootstrap CI column is
+populated for every *aggregating* probe — ones whose ``raw`` is a
+sample mean (or similar) over N observations that admit resampling.
+``adapter_ablation`` is a curve-fit: the raw metric is an R² on the
+``(λ, divergence)`` sweep, not a per-prompt aggregate. Resampling
+"residuals" would surface confidence on the *fit* rather than on the
+underlying observations, which confuses the signal the probe
+reports. The column renders as ``—`` by design; see F14 in the
+Audit 02 closure for the rationale.
 """
 
 from __future__ import annotations

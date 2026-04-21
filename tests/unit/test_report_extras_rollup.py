@@ -119,3 +119,65 @@ class TestExtrasFooterInMarkdown:
         score = SwayScore(overall=0.9, components={}, band="healthy")
         md = report.to_markdown(suite, score)
         assert "Skipped probes" not in md
+
+
+class TestNullOptOutsRollup:
+    """F15 — surface ``null_adapter.evidence["skipped_kinds"]`` in the report."""
+
+    def _suite_with_null_opt_outs(self, skipped: list[str]) -> SuiteResult:
+        now = datetime.now(UTC)
+        probes = (
+            ProbeResult(
+                name="null",
+                kind="null_adapter",
+                verdict=Verdict.PASS,
+                score=1.0,
+                evidence={"skipped_kinds": skipped},
+            ),
+            ProbeResult(name="dk", kind="delta_kl", verdict=Verdict.PASS, score=0.9, message="ok"),
+        )
+        return SuiteResult(
+            spec_path="<test>",
+            started_at=now,
+            finished_at=now,
+            base_model_id="b",
+            adapter_id="a",
+            sway_version="0.0.0",
+            probes=probes,
+        )
+
+    def test_collect_deduplicates_and_sorts(self) -> None:
+        suite = self._suite_with_null_opt_outs(
+            ["adapter_revert", "prompt_collapse", "adapter_revert"]
+        )
+        assert report.collect_null_opt_outs(suite) == ["adapter_revert", "prompt_collapse"]
+
+    def test_empty_when_no_null_adapter(self) -> None:
+        now = datetime.now(UTC)
+        probes = (
+            ProbeResult(name="dk", kind="delta_kl", verdict=Verdict.PASS, score=0.9, message="ok"),
+        )
+        suite = SuiteResult(
+            spec_path="<test>",
+            started_at=now,
+            finished_at=now,
+            base_model_id="b",
+            adapter_id="a",
+            sway_version="0.0.0",
+            probes=probes,
+        )
+        assert report.collect_null_opt_outs(suite) == []
+
+    def test_markdown_section_appears(self) -> None:
+        suite = self._suite_with_null_opt_outs(["adapter_revert", "prompt_collapse"])
+        score = SwayScore(overall=0.9, components={}, band="healthy")
+        md = report.to_markdown(suite, score)
+        assert "Null-calibration opt-outs" in md
+        assert "`adapter_revert`" in md
+        assert "`prompt_collapse`" in md
+
+    def test_markdown_omits_section_when_none(self) -> None:
+        suite = self._suite_with_null_opt_outs([])
+        score = SwayScore(overall=0.9, components={}, band="healthy")
+        md = report.to_markdown(suite, score)
+        assert "Null-calibration opt-outs" not in md

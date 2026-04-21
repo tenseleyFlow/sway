@@ -60,6 +60,58 @@ class TestModelSpec:
         spec = ModelSpec(base="x")
         assert spec.adapter is None
 
+    def test_dtype_enum_accepts_known_values(self) -> None:
+        """DC5 — every ``dtype`` branch parses cleanly. Backends rely
+        on this validation, not their own — passing ``fp12`` here would
+        otherwise crash deep inside the HF loader."""
+        for dtype in ("auto", "fp16", "bf16", "fp32"):
+            spec = ModelSpec(base="x", dtype=dtype)  # type: ignore[arg-type]
+            assert spec.dtype == dtype
+
+    def test_dtype_enum_rejects_unknown(self) -> None:
+        with pytest.raises(ValidationError):
+            ModelSpec(base="x", dtype="fp12")  # type: ignore[arg-type]
+
+    def test_trust_remote_code_default_false(self) -> None:
+        """DC5 — default is False (safe posture); user must opt in."""
+        assert ModelSpec(base="x").trust_remote_code is False
+
+    def test_trust_remote_code_accepts_true(self) -> None:
+        assert ModelSpec(base="x", trust_remote_code=True).trust_remote_code is True
+
+    def test_endpoint_default_none(self) -> None:
+        """DC5 — ``endpoint`` is an ``api``-backend-only field. Default
+        ``None`` when not specified."""
+        assert ModelSpec(base="x").endpoint is None
+
+    def test_endpoint_can_be_set(self) -> None:
+        """DC5 — the ``api`` kind expects an endpoint URL."""
+        spec = ModelSpec(
+            base="gpt-3.5-turbo-instruct",
+            kind="api",
+            endpoint="http://localhost:11434",
+        )
+        assert spec.endpoint == "http://localhost:11434"
+        assert spec.kind == "api"
+
+    def test_entry_point_optional_without_custom(self) -> None:
+        """DC5 — non-custom kinds don't need an entry_point."""
+        spec = ModelSpec(base="x", kind="hf")
+        assert spec.entry_point is None
+
+    def test_custom_kind_accepts_entry_point(self) -> None:
+        """DC5 — ``custom`` kind stores the entry_point verbatim (the
+        runner imports it)."""
+        spec = ModelSpec(base="x", kind="custom", entry_point="mypkg.backend:MyBackend")
+        assert spec.entry_point == "mypkg.backend:MyBackend"
+
+    def test_device_accepts_explicit_cpu(self) -> None:
+        """DC5 — ``device`` is a free-form str; ``"auto"`` default
+        resolves at backend-load time."""
+        assert ModelSpec(base="x", device="cpu").device == "cpu"
+        assert ModelSpec(base="x", device="cuda:0").device == "cuda:0"
+        assert ModelSpec(base="x").device == "auto"
+
 
 class TestLoadedModel:
     def test_frozen_dataclass(self) -> None:

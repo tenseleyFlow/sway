@@ -23,6 +23,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._zscore import (
     no_calibration_note,
     score_from_z,
@@ -140,16 +141,27 @@ class PreferenceFlipProbe(Probe):
 
         if len(base_wrong_idx) < spec.min_triples_for_decision:
             # Not enough base-wrong triples to decide. Fall back to mean margin delta.
-            mean_delta = statistics.fmean(
-                (ft - base) for base, ft in zip(base_margins, ft_margins, strict=True)
+            per_triple_deltas = [
+                ft - base for base, ft in zip(base_margins, ft_margins, strict=True)
+            ]
+            mean_delta = statistics.fmean(per_triple_deltas)
+            # F13 — every other numeric probe's WARN path carries a CI
+            # and a per-rank z when null_adapter is in the suite. Match
+            # that shape so downstream consumers don't see inconsistent
+            # fields by verdict.
+            ci_95 = bootstrap_ci(per_triple_deltas, seed=ctx.seed)
+            warn_stats = get_null_stats(ctx, spec.kind)
+            z = z_score(mean_delta, warn_stats)
+            z_by_rank = z_scores_by_rank(
+                mean_delta, get_null_stats_by_rank(ctx, spec.kind), sign=+1
             )
-            verdict = Verdict.WARN
             return safe_finalize(
                 name=spec.name,
                 kind=spec.kind,
-                verdict=verdict,
+                verdict=Verdict.WARN,
                 score=max(0.0, min(1.0, 0.5 + mean_delta / 4.0)),
                 raw=mean_delta,
+                z_score=z,
                 base_value=statistics.fmean(base_margins),
                 ft_value=statistics.fmean(ft_margins),
                 evidence={
@@ -159,11 +171,15 @@ class PreferenceFlipProbe(Probe):
                     "dropped_triples": dropped_triples,
                     "dropped_reasons": dropped_reasons,
                     "weight": spec.weight,
+                    "z_by_rank": z_by_rank,
+                    "raw_ci_95": list(ci_95) if ci_95 is not None else None,
                 },
                 message=(
                     f"only {len(base_wrong_idx)} base-wrong triples < "
-                    f"{spec.min_triples_for_decision} required; reporting mean-margin-delta={mean_delta:+.3f}"
+                    f"{spec.min_triples_for_decision} required; reporting "
+                    f"mean-margin-delta={mean_delta:+.3f}"
                 ),
+                ci_95=ci_95,
             )
 
         flip_rate = len(flipped_idx) / len(base_wrong_idx)

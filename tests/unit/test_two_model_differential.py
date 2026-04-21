@@ -89,6 +89,39 @@ class TestPreflightPassthrough:
         assert ok is True
 
 
+class TestConcurrencyFlagComposition:
+    """F06 regression — wrapper's ``safe_for_concurrent_views`` is the
+    AND of the two inner backends' flags, defaulting to ``False`` when
+    either is absent. Before F06, the attribute was missing entirely and
+    the runner defaulted to ``False`` even when both inners set ``True``.
+    """
+
+    def test_missing_on_both_defaults_false(self) -> None:
+        base = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        ft = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        wrapper = TwoModelDifferential(base=base, ft=ft)
+        # Dummy has safe_for_concurrent_views=False by class default.
+        assert wrapper.safe_for_concurrent_views is False
+
+    def test_both_true_composes_true(self) -> None:
+        class SafeDummy(DummyDifferentialBackend):
+            safe_for_concurrent_views = True
+
+        base = SafeDummy(base=DummyResponses(), ft=DummyResponses())
+        ft = SafeDummy(base=DummyResponses(), ft=DummyResponses())
+        wrapper = TwoModelDifferential(base=base, ft=ft)
+        assert wrapper.safe_for_concurrent_views is True
+
+    def test_one_true_one_false_composes_false(self) -> None:
+        class SafeDummy(DummyDifferentialBackend):
+            safe_for_concurrent_views = True
+
+        base = SafeDummy(base=DummyResponses(), ft=DummyResponses())
+        ft = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        wrapper = TwoModelDifferential(base=base, ft=ft)
+        assert wrapper.safe_for_concurrent_views is False
+
+
 class TestSpecAcceptsDifferentialFalse:
     def test_loader_accepts_false_then_uses_two_separate(self, tmp_path) -> None:
         """The CLI path: spec.defaults.differential=False routes through

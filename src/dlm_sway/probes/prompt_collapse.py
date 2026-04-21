@@ -220,13 +220,7 @@ def _peek_backend_tokenizer(ctx: RunContext) -> Any | None:
     in the public scoring contract would broaden it for one probe;
     instead we accept that ``prompt_collapse`` knows where to look.
     """
-    backend = ctx.backend
-    inner = getattr(backend, "_ft_view", None)
-    if inner is not None:
-        tok = getattr(inner, "_tokenizer", None)
-        if tok is not None:
-            return tok
-    return getattr(backend, "_tokenizer", None)
+    return getattr(ctx.backend, "_tokenizer", None)
 
 
 def _fit_half_life(lengths: np.ndarray, divergences: np.ndarray) -> float | None:

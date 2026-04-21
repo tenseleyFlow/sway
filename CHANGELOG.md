@@ -2,6 +2,118 @@
 
 ## Unreleased
 
+### Sprint 20 — Audit 02 closure
+
+Closes the full finding inventory from `.docs/audits/02-followup-audit.md`
+(1 🔴 critical, 8 🟠 major, 11 🟡 minor, 4 stronger-test opportunities, 3
+dead-code items). Sixteen sprints of innovation work had accumulated
+since Audit 01; the re-audit surfaced one ship-blocker (S14's bootstrap
+CI dropped at the runner boundary) plus a grab-bag of claim-vs-code
+gaps, dead branches, and untested contracts.
+
+**🔴 Critical — ship-blocker.**
+
+- **F01** — `suite/runner.py:_with_duration` now forwards every
+  `ProbeResult` field. The pre-fix version silently dropped `ci_95`
+  on every probe, making S14's headline deliverable runtime-inert in
+  any real `sway run`. Regression test at the runner boundary + snapshot
+  fixture carrying a populated `ci_95` pin the fix.
+
+**🟠 Major — claim-vs-code gaps.**
+
+- **F02** — real `sklearn.cluster.KMeans` exercised by two new unit
+  tests (separation + seed determinism) + a slow+online integration
+  test at `tests/integration/test_cluster_kl_e2e.py`. Before: every
+  cluster_kl test monkeypatched `_kmeans_cluster` with an argmax stub,
+  leaving S16's reason-for-being unverified.
+- **F03** — `sway list-probes` falls back to the defining module's
+  `__doc__` when a probe class has no docstring. Every one of the 13
+  shipped probes now renders a summary row.
+- **F04** — `sway doctor` probes `plotly` (the load-bearing `[viz]` dep),
+  `sklearn` (S16 cluster_kl), and the `api` extras (`httpx`, `tenacity`).
+- **F05** — README primitives table reflects 13 probes (adherence +
+  cluster_kl, calibration + external_perplexity, baseline row for
+  null_adapter).
+- **F06** — `TwoModelDifferential` composes `safe_for_concurrent_views`
+  from its two inner backends. Before: the attribute was missing and
+  the runner defaulted to `False` even when both inners set `True`,
+  breaking S13's concurrency claim at the only supported differential-
+  use pattern.
+- **F07** — `integrations/dlm/autogen` emits `cluster_kl` when the
+  prompt pool clears 20 entries; markdown report gains a per-probe
+  "Cluster breakdown" section with per-cluster mean KL + exemplars.
+- **F08** — `backends/dummy._NullView` RNG uses `hashlib.md5` instead
+  of Python's PYTHONHASHSEED-salted `hash()`. Cross-process determinism
+  test at `tests/unit/test_cross_process_determinism.py` pins the fix.
+- **F09** — trace writer ↔ analyzer round-trip test at
+  `tests/unit/test_runner_backend_stats.py`: runs a suite with
+  `trace_path=`, loads the file back, asserts probe labels + hit/miss
+  counts match `backend_stats`.
+
+**🟡 Minor — dead code, doc drift, latent brittleness.**
+
+- **F10** — removed dead `_ft_view` branch in `probes/prompt_collapse.py`.
+- **F11** — pytest plugin resolves spec paths against `config.rootpath`,
+  not process cwd.
+- **F12** — `backends/api._post_completions` delegates to tenacity's
+  `Retrying()` callable; removes the unreachable post-loop fallback.
+- **F13** — `preference_flip` WARN branch emits `ci_95` and `z_by_rank`
+  for consistency with every other numeric probe's WARN shape.
+- **F14** — `adapter_ablation` module docstring documents why `ci_95`
+  renders as em-dash (it's a curve-fit, not a sample-mean aggregator).
+- **F15** — report footer surfaces `null_adapter` opt-outs (probes with
+  `calibrate_spec=None`) in both terminal and markdown surfaces.
+- **F16** — report category ordering derives from
+  `DEFAULT_COMPONENT_WEIGHTS` and accepts unknown categories from
+  custom `Probe` subclasses.
+- **F17** — `cluster_kl` degenerate zero-variance case now returns
+  `Verdict.WARN` with `evidence["degenerate_zero_variance"]=True` and
+  suppresses z-score to avoid a spurious small-sample-noise calibration.
+- **F18** — `_calibration_pack.py` gains per-section provenance notes
+  (F18 audit trail) without noisy per-item annotations.
+- **F19** — pytest plugin defers `dlm_sway.core.result` /
+  `dlm_sway.core.errors` imports to call sites so non-`@pytest.mark.sway`
+  users don't pay the load tax.
+- **F20** — `sway check` `--help` documents the σ-banner's null-calibration
+  dependency (fall-through to composite score band when null SKIPs).
+
+**Stronger-test opportunities — regression tests for things we weren't
+pinning.**
+
+- **#9** — `probes/_divergence` rejects effectively-uniform TokenDists
+  (spread < 1e-9) via `_check_non_degenerate_token_dist`. Catches a
+  shape-broken lm_head that would otherwise compute a trivial constant
+  divergence across prompts. Two compatibility touchups rode with the
+  change: dummy backend's synthesized `ft` dist and cluster_kl test
+  fixture `_dist_broad` gained a tiny monotonic perturbation to clear
+  the guard (real models never produce bit-uniform logits thanks to
+  fp32 accumulation noise).
+- **#10** — cross-verdict consistency test
+  (`tests/unit/test_cross_verdict_consistency.py`): runs the same spec
+  through `sway run`, `sway gate`, and `sway report --format junit` and
+  asserts identical per-verdict tallies.
+- **#11** — `sway doctor --json` schema-shape snapshot test locks the
+  top-level keys and the per-extra module-name set.
+- **#12** — subprocess determinism test asserts `_NullView.next_token_dist`
+  is byte-identical across `PYTHONHASHSEED` values; pins F08's fix.
+
+**Dead-code inventory — DC3–DC5.**
+
+- **DC3** — `null_adapter.py`'s pre-S10 cache-promotion branch is
+  annotated as legacy; removal queued for the next minor.
+- **DC4** — dropped the stderr warning at `suite/runner.py` that fired
+  whenever `concurrent_probes > 1` even though execution never fanned
+  out. The spec field is still accepted (future pool will light it up);
+  the noisy warning is gone.
+- **DC5** — `tests/unit/test_model.py` grows coverage of `ModelSpec`'s
+  dtype enum, `endpoint`, `trust_remote_code`, and `custom`/`api`
+  `kind` branches.
+
+Final state: 582 unit tests + 3 integration tests passing; mypy strict
+clean across 55 source files; ruff + format clean across 137 files.
+Sprint 20 is a single PR composed of per-finding, per-file commits so
+the history reads as a fix-by-fix cleanup.
+
 ### Sprint 16 — Cluster-coherent KL probe
 
 Closes Audit 01 innovation item F8. Adds a new `cluster_kl` probe that

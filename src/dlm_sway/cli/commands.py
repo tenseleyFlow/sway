@@ -138,9 +138,11 @@ def _print_dry_run(spec_path: Path) -> None:
 
 def list_probes_cmd() -> None:
     """List every shipped probe kind with its category + one-line summary (D6)."""
-    # Make sure every probe module has been imported and registered.
+    import sys
+
     from rich.table import Table
 
+    # Make sure every probe module has been imported and registered.
     import dlm_sway.probes  # noqa: F401
     from dlm_sway.probes.base import registry
 
@@ -150,11 +152,27 @@ def list_probes_cmd() -> None:
     table.add_column("summary")
     for kind in sorted(registry()):
         cls = registry()[kind]
-        # First non-empty line of the docstring is the one-liner.
-        doc = (cls.__doc__ or "").strip()
-        summary = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        # Prefer the class-level docstring, then fall back to the
+        # defining module's module-level docstring. Most probe modules
+        # lead with a solid one-liner at the top; the class body often
+        # skips a docstring to avoid repeating it.
+        summary = _first_doc_line(cls.__doc__)
+        if not summary:
+            module = sys.modules.get(cls.__module__)
+            summary = _first_doc_line(getattr(module, "__doc__", None))
         table.add_row(kind, cls.category, summary)
     Console().print(table)
+
+
+def _first_doc_line(doc: str | None) -> str:
+    """Return the first non-empty line of ``doc``, stripped."""
+    if not doc:
+        return ""
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def gate_cmd(
@@ -288,6 +306,14 @@ def check_cmd(
 
     Runs A1 DeltaKL + C2 CalibrationDrift on a small prompt set. No
     spec file required.
+
+    **Banner semantics (F20 clarification).** The ``+N.NNσ above noise``
+    header appears only when ``null_adapter`` actually calibrated this
+    run — i.e., when the backend implements ``NullCalibratedBackend``.
+    Without null calibration (non-HF backends like the HTTP API or MLX
+    inference), the banner falls back to the composite score band
+    ("healthy", "partial fit", "noise band") and the σ wording is
+    suppressed to avoid a false-precision claim.
     """
     from dlm_sway.backends import build as build_backend
     from dlm_sway.core.model import ModelSpec
@@ -460,10 +486,17 @@ def autogen_cmd(
 _DOCTOR_BACKENDS: dict[str, tuple[str, ...]] = {
     "hf": ("torch", "transformers", "peft"),
     "mlx": ("mlx", "mlx_lm"),
-    "semsim": ("sentence_transformers",),
+    # ``sklearn`` is S16's cluster_kl dep; shipped under [semsim] so it
+    # rides the same 80 MB MiniLM load adapter_revert already pulls.
+    "semsim": ("sentence_transformers", "sklearn"),
     "style": ("spacy", "textstat", "nlpaug"),
     "dlm": ("dlm",),
-    "viz": ("matplotlib",),
+    # ``plotly`` is the load-bearing dep for ``sway report --format html``;
+    # S12 docs listed it but doctor never probed it before F04.
+    "viz": ("matplotlib", "plotly"),
+    # S13 API backend.
+    "api": ("httpx", "tenacity"),
+    "pytest": ("pytest",),
 }
 
 

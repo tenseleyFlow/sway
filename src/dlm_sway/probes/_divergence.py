@@ -45,6 +45,41 @@ def _check_finite_token_dist(name: str, dist: TokenDist) -> None:
         )
 
 
+# Tolerance for "effectively uniform." Real models never return
+# bit-identical logits across the top-k — fp32 accumulation noise
+# alone produces spreads in the 1e-5 range. We reject only distributions
+# that are suspiciously exact: spread below 1e-9 strongly implies a
+# broken lm_head or a test fixture that zero-fills logits.
+_UNIFORM_LOGPROB_TOL: float = 1e-9
+
+
+def _check_non_degenerate_token_dist(name: str, dist: TokenDist) -> None:
+    """Reject a TokenDist whose top-k logprobs are all (effectively) equal.
+
+    A well-formed next-token distribution from a real model has a
+    peaked top-k; perfectly uniform logprobs mean either the lm_head
+    broke or upstream sampling code clobbered the logits. The
+    divergence math is still defined (KL(uniform ∥ uniform) = 0) but
+    the resulting probe value would be a constant across prompts,
+    producing a meaningless ``delta_kl``. Surface the broken model
+    explicitly rather than letting it leak a false zero.
+
+    Called after the finite check — order matters because a NaN top-k
+    would trip this guard first with a confusing message.
+    """
+    if dist.logprobs.size < 2:
+        return
+    spread = float(dist.logprobs.max() - dist.logprobs.min())
+    if spread < _UNIFORM_LOGPROB_TOL:
+        raise ProbeError(
+            "divergence",
+            f"{name} TokenDist has effectively-uniform top-{dist.logprobs.size} "
+            f"logprobs (spread={spread:.2e}) — divergence on a degenerate "
+            f"distribution would return a trivial constant; refusing to "
+            f"proceed. Check the backend's lm_head and logits pipeline.",
+        )
+
+
 def aligned_probs(
     base: TokenDist, ft: TokenDist
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
@@ -62,6 +97,8 @@ def aligned_probs(
     """
     _check_finite_token_dist("base", base)
     _check_finite_token_dist("ft", ft)
+    _check_non_degenerate_token_dist("base", base)
+    _check_non_degenerate_token_dist("ft", ft)
 
     union_ids = np.union1d(base.token_ids, ft.token_ids)
     k = int(union_ids.size)

@@ -11,7 +11,7 @@ Differential testing for fine-tuned causal language models.
 in a meaningful way, or is the model just defaulting to the pretrained
 base?*
 
-`sway` gives you a trustworthy, reproducible answer with eleven
+`sway` gives you a trustworthy, reproducible answer with thirteen
 purpose-built primitives, each z-scored against a null-adapter baseline.
 No LLM judges. No external APIs. Deterministic on CPU where possible.
 
@@ -122,14 +122,16 @@ user-authored document. The right question is *"did the adapter actually
 move the model toward what I wrote?"* — and existing tools answer this
 poorly.
 
-`sway` answers it directly via eleven primitives across four categories:
+`sway` answers it directly via thirteen primitives across four
+categories, plus a baseline-calibration primitive:
 
 | Category      | Primitives                                            |
 |---------------|-------------------------------------------------------|
-| Adherence     | `delta_kl`, `adapter_revert`, `prompt_collapse`       |
+| Adherence     | `delta_kl`, `adapter_revert`, `prompt_collapse`, `cluster_kl` |
 | Attribution   | `section_internalization`, `paraphrase_invariance`, `preference_flip` |
-| Calibration   | `style_fingerprint`, `calibration_drift`, `leakage`   |
+| Calibration   | `style_fingerprint`, `calibration_drift`, `leakage`, `external_perplexity` |
 | Ablation      | `adapter_ablation` ← the signature primitive          |
+| Baseline      | `null_adapter` (powers every z-score in the report)   |
 
 **The signature primitive.** `adapter_ablation` scales the LoRA additive
 term by λ ∈ {0, 0.25, 0.5, 0.75, 1.0, 1.25} and measures the divergence

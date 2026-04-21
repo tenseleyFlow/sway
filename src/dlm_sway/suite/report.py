@@ -137,6 +137,29 @@ def collect_missing_extras(suite: SuiteResult) -> list[str]:
     return sorted(found)
 
 
+def collect_null_opt_outs(suite: SuiteResult) -> list[str]:
+    """Probe kinds that opted out of null calibration.
+
+    ``null_adapter`` publishes ``evidence["skipped_kinds"]`` with the
+    probe kinds whose ``calibrate_spec`` returned ``None`` (e.g.
+    ``adapter_revert`` — no embedder on the null proxy;
+    ``prompt_collapse`` — noise can't fit an exponential decay).
+    Returns a deduplicated, sorted list of those kinds, or an empty
+    list when no null_adapter ran in the suite.
+    """
+    found: set[str] = set()
+    for p in suite.probes:
+        if p.kind != "null_adapter":
+            continue
+        skipped = p.evidence.get("skipped_kinds")
+        if not skipped:
+            continue
+        for kind in skipped:
+            if isinstance(kind, str):
+                found.add(kind)
+    return sorted(found)
+
+
 def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None = None) -> None:
     """Render the report to a rich Console (stdout by default)."""
     c = console or Console()
@@ -159,13 +182,16 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
         )
     )
 
-    # Component breakdown
+    # Component breakdown. Order matches ``DEFAULT_COMPONENT_WEIGHTS``
+    # (the extensibility point) and appends any categories present in
+    # ``score.components`` but not in the default weights — so a custom
+    # Probe subclass with a new category still renders.
     comp_table = Table.grid(padding=(0, 2))
     comp_table.add_column(justify="left")
     comp_table.add_column(justify="right")
     comp_table.add_column()
     comp_table.add_column(style="dim")
-    for cat in ("adherence", "attribution", "calibration", "ablation", "baseline"):
+    for cat in _category_order(score):
         if cat not in score.components:
             continue
         v = score.components[cat]
@@ -221,6 +247,21 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             Text(
                 f"{skipped_ct} probe(s) skipped due to missing extras: "
                 f"pip install 'dlm-sway[{','.join(extras)}]'",
+                style="dim",
+            )
+        )
+
+    # F15: null-calibration opt-outs rollup. Probes whose
+    # ``calibrate_spec`` returns ``None`` fall back to fixed-threshold
+    # verdicts. Surface the list in the footer so users understand
+    # why those rows read ``(no calibration)`` in the message column.
+    opt_outs = collect_null_opt_outs(suite)
+    if opt_outs:
+        c.print()
+        c.print(
+            Text(
+                f"{len(opt_outs)} probe(s) opted out of null calibration "
+                f"(using fixed thresholds): {', '.join(opt_outs)}",
                 style="dim",
             )
         )
@@ -442,7 +483,10 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
 
     buf.write("## Components\n\n")
     buf.write("| category | score | weight | |\n|---|---:|---:|---|\n")
-    for cat, v in score.components.items():
+    for cat in _category_order(score):
+        if cat not in score.components:
+            continue
+        v = score.components[cat]
         weight = score.weights.get(cat, 0.0)
         label = "(informational, weight=0)" if weight == 0.0 else ""
         buf.write(f"| {cat} | {format_score(v)} | {format_score(weight)} | {label} |\n")
@@ -479,10 +523,63 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         buf.write(f"{skipped_ct} probe(s) skipped due to missing extras. Install with:\n\n")
         buf.write(f"```\npip install 'dlm-sway[{','.join(extras)}]'\n```\n")
 
+    # F15: null-calibration opt-outs rollup.
+    opt_outs = collect_null_opt_outs(suite)
+    if opt_outs:
+        buf.write("\n## Null-calibration opt-outs\n\n")
+        buf.write(
+            f"{len(opt_outs)} probe(s) fall back to fixed thresholds because "
+            f"their `calibrate_spec` returns `None`:\n\n"
+        )
+        for kind in opt_outs:
+            buf.write(f"- `{kind}`\n")
+
+    # F07 — cluster_kl sub-line: expand the per-cluster breakdown so
+    # the reader can answer "which topic moved?" without cracking open
+    # the JSON. The row itself already carries ``k=N, spec=X.XX`` in
+    # the message; this section adds the per-cluster mean KL + top
+    # exemplars.
+    ck_probes = [p for p in suite.probes if p.kind == "cluster_kl" and p.evidence]
+    if ck_probes:
+        buf.write("\n## Cluster breakdown (cluster_kl)\n\n")
+        for p in ck_probes:
+            per_cluster = p.evidence.get("per_cluster_mean_kl", [])
+            sizes = p.evidence.get("per_cluster_size", [])
+            exemplars = p.evidence.get("cluster_exemplars", [])
+            buf.write(f"### `{p.name}`\n\n")
+            buf.write("| cluster | size | mean KL | exemplars |\n")
+            buf.write("|---:|---:|---:|---|\n")
+            for i, (mean, size, ex) in enumerate(zip(per_cluster, sizes, exemplars, strict=False)):
+                mean_str = "—" if not isinstance(mean, int | float) else f"{mean:.3f}"
+                ex_str = "; ".join(e.replace("|", "\\|") for e in (ex or [])) or "—"
+                buf.write(f"| {i} | {size} | {mean_str} | {ex_str} |\n")
+            buf.write("\n")
+
     return buf.getvalue()
 
 
 # -- helpers -----------------------------------------------------------
+
+
+def _category_order(score: SwayScore) -> list[str]:
+    """Unified render order for component categories.
+
+    Falls back through two sources, in priority order:
+
+    1. Keys of :data:`core.result.DEFAULT_COMPONENT_WEIGHTS` — the
+       canonical category list every first-party probe slots into.
+    2. Any category present in ``score.components`` that isn't in the
+       default weights — so a custom :class:`Probe` subclass declaring
+       a brand-new category still renders (F16).
+
+    Keeps the renderer loop in terminal + markdown identical so future
+    additions flow through both surfaces without a second code path.
+    """
+    from dlm_sway.core.result import DEFAULT_COMPONENT_WEIGHTS
+
+    order: list[str] = list(DEFAULT_COMPONENT_WEIGHTS.keys())
+    order.extend(cat for cat in score.components if cat not in DEFAULT_COMPONENT_WEIGHTS)
+    return order
 
 
 def _cache_line(suite: SuiteResult) -> str | None:
@@ -542,6 +639,7 @@ def _bar(v: float, *, width: int = 10) -> str:
 
 __all__ = [
     "collect_missing_extras",
+    "collect_null_opt_outs",
     "format_duration_s",
     "format_raw",
     "format_score",

@@ -14,6 +14,31 @@ text); items were composed by hand from primary-school curricula in
 common use across English-speaking countries. This keeps the wheel
 license-clean and lets us ship the pack without attribution.
 
+**Per-section origins** (F18 audit trail). Granular provenance is
+tracked at the section boundary below rather than per-item — individual
+facts like "The capital of France is Paris" are not copyrightable, so
+a row-level citation is paperwork without legal substance. If a future
+DMCA-style question surfaces on a specific section, the origin
+category below narrows the audit to the right primary-school domain.
+
+- Geography — country/capital, ocean, mountain, river, continent facts
+  from primary-school geography curricula.
+- Natural sciences — physics/chemistry/biology facts at the 4th–6th
+  grade level; units + constants from introductory physics.
+- Arithmetic — items mechanically derivable (addition, multiplication,
+  squares/cubes, conversions). Not a memorization test.
+- Language and idiom — high-frequency English idioms in continuous use
+  since pre-1928; phrases listed in Merriam-Webster / OED as public-
+  domain idiom.
+- History — historical dates from standard primary-school history.
+  Names (figures, countries) are facts, not creative expression.
+- Biology — anatomy and natural-history facts at the 4th–6th grade
+  level.
+- Technology — basic computing/internet vocabulary from primary-school
+  digital-literacy (HTML = "Hypertext Markup Language", etc.).
+- Miscellaneous trivia — mixed-domain primary-school facts that didn't
+  fit the category rubric above.
+
 **Size.** 200 items. With ``regression_nats=1.0`` and
 ``assert_fraction_regressed_lt=0.15``, a single regressed item moves
 the fraction by 0.5 percentage points — well below the gate's
