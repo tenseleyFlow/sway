@@ -46,6 +46,14 @@ DEFAULT_VARIABLE_FIELDS: frozenset[str] = frozenset(
         # that vary with load and cold/warm cache — not part of the
         # determinism contract.
         "backend_stats",
+        # ``adapter_id`` and ``base_model_id`` are absolute-path
+        # identifiers the spec loader resolves against cwd. Different
+        # cwds on different platforms (``/Users/.../`` on darwin vs
+        # ``/home/runner/...`` on ubuntu) surface as drift without
+        # any real numeric change. The numeric fields (``raw``,
+        # ``score``, etc.) are what the determinism contract covers.
+        "adapter_id",
+        "base_model_id",
     }
 )
 

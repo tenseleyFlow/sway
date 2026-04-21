@@ -71,6 +71,9 @@ class TestMaskVariableFields:
             "duration_s",
             "sway_version",
             "backend_stats",
+            # Platform-dependent path identifiers.
+            "adapter_id",
+            "base_model_id",
         }
         assert expected_members <= DEFAULT_VARIABLE_FIELDS
 
