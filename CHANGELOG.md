@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Sprint 19 — Pre-commit hook `sway gate`
+
+Closes Audit 01 stretch-list F-item "pre-commit hook sway gate." Ships
+a `.pre-commit-hooks.yaml` declaring two hook variants so
+[pre-commit.com](https://pre-commit.com) users can gate their adapter
+on every commit that touches a spec, `.dlm` file, or adapter directory.
+
+- **Two hooks, pick your posture.**
+  - `sway-gate` — `language: system`. Uses the sway install on the
+    user's `PATH`. Fast, zero install cost. Recommended default.
+  - `sway-gate-isolated` — `language: python` + git-based
+    `additional_dependencies` (`dlm-sway[hf] @ git+...@<SHA>`).
+    Self-contained — pre-commit builds a fresh venv and installs
+    sway + torch + transformers on first run (~5 GB, ~2 min).
+- **Rev pinning stance.** Example config pins to a commit SHA, not
+  `HEAD`. Sway is pre-v0.1.0 — no tagged release yet — and `HEAD`
+  drifts silently on every `pre-commit autoupdate`. SHA pinning is
+  the honest pre-release pattern; migration to `rev: v0.1.0` is a
+  README edit once the first release lands.
+- **`pass_filenames: false` on both variants.** `sway gate` takes
+  exactly one spec path; the user declares it via `args:`. The
+  `files:` regex decides when the hook fires. No ambiguity.
+- **Scope discipline.** Neither hook surfaces `--json` or
+  `--markdown` flags. The hook gates (non-zero on FAIL) and nothing
+  else. Users wanting report artifacts run `sway run` separately.
+- **Readme "Pre-commit" section** documents the consumer-side config
+  for both variants, the SHA-pinning rationale, and the one-time
+  install cost of the isolated variant.
+- **`examples/precommit-example/`** — template `sway.yaml`,
+  consumer-side `.pre-commit-config.yaml`, and a README walk-through.
+- **`tests/integration/test_pre_commit_hook.py`** (slow + online) —
+  three cases: (a) parse-and-shape smoke test on
+  `.pre-commit-hooks.yaml`; (b) pass-case runtime — spawns
+  `pre-commit run sway-gate` as a subprocess against a tmp git repo
+  with a real LoRA on SmolLM2-135M, asserts exit 0; (c) fail-case —
+  same fixture with an impossible `assert_mean_gte`, asserts
+  non-zero exit + `gate FAILED` banner.
+- **`pre-commit>=3.8`** in `[dependency-groups].dev` so the
+  integration test can invoke it as a subprocess. Keeps the tool
+  out of the user's runtime deps.
+
 ### Sprint 18 — Cross-platform determinism golden
 
 Closes Audit 01 stretch-list F-item "cross-platform determinism golden

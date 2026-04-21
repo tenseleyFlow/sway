@@ -1,0 +1,42 @@
+# Minimal sway spec — template for the pre-commit-gate recipe.
+#
+# Replace the ``base`` and ``adapter`` paths below with your own. The
+# default values are placeholders documenting the shape the hook
+# expects. Running ``sway gate`` against this verbatim will fail
+# because the paths don't resolve — that's by design; the user
+# customizes before plugging the hook in.
+#
+# See README "Pre-commit" section for the full walk-through.
+
+version: 1
+models:
+  base:
+    base: HuggingFaceTB/SmolLM2-135M-Instruct
+    kind: hf
+    adapter: path/to/your/adapter
+    dtype: fp32
+    device: cpu
+  ft:
+    base: HuggingFaceTB/SmolLM2-135M-Instruct
+    kind: hf
+    adapter: path/to/your/adapter
+    dtype: fp32
+    device: cpu
+defaults:
+  seed: 0
+  differential: true
+  # The gate's exit-code threshold. 0.0 means "any pass is acceptable";
+  # real specs raise this to 0.6 or 0.8 for a meaningful quality bar.
+  coverage_threshold: 0.0
+suite:
+  # One cheap probe keeps the pre-commit hook fast. Add more probes as
+  # the adapter gets more surface area worth gating.
+  - name: dk
+    kind: delta_kl
+    prompts:
+      - The capital of France is
+      - Python decorators are
+      - Water boils at
+      - Mitochondria are
+    divergence: js
+    assert_mean_gte: 0.0

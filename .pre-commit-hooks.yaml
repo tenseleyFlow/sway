@@ -1,0 +1,55 @@
+# sway pre-commit hooks (S19).
+#
+# Two variants — pick the one that matches your install posture. Both
+# run ``sway gate`` under the hood and differ only in how sway itself
+# is resolved on the runner.
+#
+# Variant 1: ``sway-gate`` (RECOMMENDED) — ``language: system``.
+#   Uses the sway binary already on your ``PATH``. Fast, no extra
+#   install. Requires ``pip install 'dlm-sway[hf]'`` beforehand. This
+#   is the right choice when sway is part of your dev environment
+#   anyway.
+#
+# Variant 2: ``sway-gate-isolated`` — ``language: python``.
+#   pre-commit builds a fresh Python venv and installs sway + the
+#   ``[hf]`` extra into it. First run pulls ~5 GB of torch wheels and
+#   takes ~2 minutes; subsequent runs reuse the cached venv. Right
+#   choice for users without a pre-existing sway install.
+#
+# Both variants set ``pass_filenames: false`` — ``sway gate`` takes
+# exactly one spec path via ``args:``, not a list of matched files.
+# The ``files:`` regex only decides WHEN the hook fires; the ``args:``
+# in your ``.pre-commit-config.yaml`` decides WHAT spec it gates.
+#
+# Consumer-side config example — see README "Pre-commit" section for
+# the full walk-through.
+
+- id: sway-gate
+  name: sway gate — differential testing for fine-tuned LMs
+  description: |
+    Gate an adapter against its sway spec on every commit that touches
+    the spec, a .dlm file, or adapter files. Uses the sway install on
+    your PATH.
+  entry: sway gate
+  language: system
+  # Fire on changes to the spec, .dlm documents, or adapter directories
+  # (adapter_config.json / adapter_model.safetensors live inside an
+  # "adapter" dir by convention). Narrow enough that Python edits
+  # don't trigger the gate — those are caught by pytest.
+  files: '(?:(^|/)sway\.ya?ml|\.dlm$|(^|/)adapter.*(adapter_config\.json|adapter_model\.safetensors)$)'
+  pass_filenames: false
+
+- id: sway-gate-isolated
+  name: sway gate (isolated venv) — differential testing for fine-tuned LMs
+  description: |
+    Same as sway-gate, but pre-commit builds a fresh Python venv and
+    installs sway inside it. First run pulls ~5 GB of torch wheels —
+    use this variant when you can't rely on a host-level sway install.
+  entry: sway gate
+  language: python
+  # Pinned to a specific commit — sway hasn't tagged a release yet.
+  # When v0.1.0 ships, we'll switch to tag-based pinning.
+  additional_dependencies:
+    - "dlm-sway[hf] @ git+https://github.com/tenseleyFlow/sway.git@2ecd9a0c9d65a9b9576a185597c88f41444f9646"
+  files: '(?:(^|/)sway\.ya?ml|\.dlm$|(^|/)adapter.*(adapter_config\.json|adapter_model\.safetensors)$)'
+  pass_filenames: false
