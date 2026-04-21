@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 BackendKind = Literal["hf", "mlx", "dummy", "custom"]
 """Registered scoring-backend kinds.
@@ -55,6 +55,21 @@ class ModelSpec(BaseModel):
     entry_point: str | None = Field(default=None)
     """Required when ``kind='custom'``. Import path like
     ``mypkg.mybackend:MyBackend``."""
+
+    @field_validator("adapter")
+    @classmethod
+    def _normalize_adapter_path(cls, v: Path | None) -> Path | None:
+        """Expand ``~`` and resolve relative segments at spec-load time.
+
+        Before B22 every backend re-did this work in its constructor;
+        normalizing once at the spec boundary means the cache key in
+        :func:`dlm_sway.probes._null_cache.compute_key` (which encodes
+        the adapter path) is stable regardless of how the user spelled
+        it in YAML or on the CLI.
+        """
+        if v is None:
+            return None
+        return Path(v).expanduser().resolve()
 
 
 @dataclass(frozen=True, slots=True)
