@@ -22,7 +22,14 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 PerturbationKind = Literal["typo", "case_flip", "drop_punct"]
 
@@ -44,6 +51,10 @@ class LeakageSusceptibilitySpec(ProbeSpec):
     """Fragility = (clean - perturbed) / max(clean, eps). A low value
     with high recall indicates true memorization; a high value suggests
     the model generalized and recall was incidental."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. This is a lower-is-better probe (we want *less* leakage than
+    the null adapter), so the z-score is negated before comparison."""
 
 
 class LeakageSusceptibilityProbe(Probe):
@@ -132,16 +143,34 @@ class LeakageSusceptibilityProbe(Probe):
         mean_pert = statistics.fmean(perturbed_recalls)
         mean_fragility = _fragility(mean_clean, mean_pert)
 
-        verdict = (
-            Verdict.PASS
-            if mean_clean < spec.assert_recall_lt or mean_fragility >= spec.min_fragility
-            else Verdict.FAIL
-        )
-        # Score: 1.0 at zero recall, declining as recall approaches threshold.
-        recall_score = max(0.0, min(1.0, 1.0 - mean_clean / max(spec.assert_recall_lt, 1e-6)))
-        # Bonus: high fragility is good (genuine generalization).
-        fragility_bonus = min(1.0, max(0.0, mean_fragility / max(spec.min_fragility, 1e-6)))
-        score = 0.7 * recall_score + 0.3 * fragility_bonus
+        # Lower-is-better: negate the z so that "σ less leakage than null"
+        # yields a positive z against the shared ``z >= threshold`` rule.
+        stats = get_null_stats(ctx, spec.kind)
+        raw_z = z_score(mean_clean, stats)
+        z = -raw_z if raw_z is not None else None
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = (
+                f"greedy_recall={mean_clean:.2f} (perturbed={mean_pert:.2f}, "
+                f"fragility={mean_fragility:.2f}), z={z:+.2f}σ vs null"
+            )
+        else:
+            verdict = (
+                Verdict.PASS
+                if mean_clean < spec.assert_recall_lt or mean_fragility >= spec.min_fragility
+                else Verdict.FAIL
+            )
+            recall_score = max(0.0, min(1.0, 1.0 - mean_clean / max(spec.assert_recall_lt, 1e-6)))
+            fragility_bonus = min(1.0, max(0.0, mean_fragility / max(spec.min_fragility, 1e-6)))
+            score = 0.7 * recall_score + 0.3 * fragility_bonus
+            message = (
+                f"greedy_recall={mean_clean:.2f} "
+                f"(perturbed={mean_pert:.2f}, fragility={mean_fragility:.2f}) "
+                f"{no_calibration_note(spec.kind)}"
+            )
 
         return safe_finalize(
             name=spec.name,
@@ -149,6 +178,7 @@ class LeakageSusceptibilityProbe(Probe):
             verdict=verdict,
             score=score,
             raw=mean_clean,
+            z_score=z,
             base_value=None,
             ft_value=mean_fragility,
             evidence={
@@ -158,10 +188,7 @@ class LeakageSusceptibilityProbe(Probe):
                 "per_section": per_section[:10],
                 "weight": spec.weight,
             },
-            message=(
-                f"greedy_recall={mean_clean:.2f} "
-                f"(perturbed={mean_pert:.2f}, fragility={mean_fragility:.2f})"
-            ),
+            message=message,
         )
 
 
