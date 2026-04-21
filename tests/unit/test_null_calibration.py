@@ -232,6 +232,56 @@ class TestProbe:
         r = probe.run(fresh_spec, RunContext(backend=backend))
         assert r.evidence["from_cache"] is False
 
+    def test_std_floor_prevents_runaway_zscore(self) -> None:
+        """C9: identical raws across seeds → std=0 → clamped to 1e-6.
+
+        Use a single-run calibration (no variance by construction) to
+        force the degenerate case; the runner must still publish the
+        kind with a non-zero std so downstream z-scores stay finite.
+        """
+        backend = _diverging_backend()
+        probe, spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 1,  # single seed → std=0
+                "calibrate_kinds": ["delta_kl"],
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.PASS
+        stats = result.evidence["null_stats"]["delta_kl"]
+        assert stats["std"] >= 1e-6
+        # And the downstream z-score computation is finite, not inf.
+        from dlm_sway.probes._zscore import z_score
+
+        z = z_score(0.5, stats)
+        assert z is not None
+        assert np.isfinite(z)
+
+    def test_per_kind_stats_published(self) -> None:
+        """Every calibrating kind gets its own (mean, std, n) triple."""
+        backend = _diverging_backend()
+        probe, spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 3,
+                "calibrate_kinds": ["delta_kl", "paraphrase_invariance"],
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        stats = result.evidence["null_stats"]
+        for kind in ("delta_kl", "paraphrase_invariance"):
+            assert kind in stats, f"missing {kind} in published stats"
+            s = stats[kind]
+            assert "mean" in s
+            assert "std" in s
+            assert "n" in s
+            assert s["std"] >= 1e-6
+
     def test_skip_when_backend_not_null_calibrated(self) -> None:
         class _Bare:
             def as_base(self):  # noqa: ANN202
