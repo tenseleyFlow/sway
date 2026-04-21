@@ -68,9 +68,10 @@ semsim = [
 dlm = [
     "dlm>=0.9",
 ]
-# Visualization (P9).
+# Visualization (P9 + S12 HTML report).
 viz = [
     "matplotlib>=3.8",
+    "plotly>=5.20",
 ]
 all = [
     "torch>=2.4",
@@ -84,6 +85,7 @@ all = [
     "nlpaug>=1.1",
     "sentence-transformers>=3.0",
     "matplotlib>=3.8",
+    "plotly>=5.20",
 ]
 
 [project.scripts]
@@ -196,6 +198,8 @@ module = [
     "nlpaug.*",
     "matplotlib",
     "matplotlib.*",
+    "plotly",
+    "plotly.*",
     "huggingface_hub.*",
     "dlm.*",
 ]
