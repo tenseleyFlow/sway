@@ -99,7 +99,20 @@ suite:
 ```bash
 sway run sway.yaml              # full report to terminal + JSON
 sway gate sway.yaml --junit     # CI-friendly; non-zero on fail
+
+# Override the composite weights on the command line (partial overrides
+# are fine — unspecified categories keep their defaults):
+sway run sway.yaml --weights "attribution=0.5,adherence=0.2"
 ```
+
+Inside `sway.yaml`, tuning knobs in `defaults` include:
+
+- `seed` — passed to `seed_everything` before any probe runs.
+- `differential` (default `true`) — toggle between the single-load PEFT
+  path and a two-model load (doubled memory, rarely needed; for custom
+  backends that can't do in-place adapter toggling).
+- `score_weights` — per-category weight overrides baked into the spec so
+  CI runs reproduce the same score without a CLI flag.
 
 ## Why it exists
 
@@ -129,7 +142,18 @@ adapter math.
 a null-adapter baseline — a same-structure LoRA with random-init weights.
 "Your adapter's KL is 4.2σ above noise" is a far stronger claim than a
 fixed threshold. The null-adapter calibration requires a backend that
-implements `NullCalibratedBackend` (the HF backend does).
+implements `NullCalibratedBackend` (the HF backend does); probes that
+can't be calibrated (e.g., `adapter_revert` needs an embedder, the null
+proxy doesn't have one) surface `(no calibration)` in the report and
+fall back to fixed thresholds. Calibration stats are cached on disk
+under `~/.dlm-sway/null-stats/` keyed by backend identity.
+
+**Determinism.** Every `sway run` calls `seed_everything(spec.defaults.seed)`
+before the first probe — seeds python/numpy/torch RNGs and asks torch
+for deterministic algorithms (`CUBLAS_WORKSPACE_CONFIG=:4096:8`). The
+report footer prints the achieved class — `strict` (CUDA), `best_effort`
+(CPU/MPS), or `loose` (deterministic algorithms refused). Same seed +
+same host = bit-identical scoring across runs.
 
 ## The `.dlm` integration
 

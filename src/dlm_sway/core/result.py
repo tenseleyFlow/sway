@@ -78,6 +78,20 @@ class ProbeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DeterminismReport:
+    """Serializable view of what seeding the runner accomplished.
+
+    Mirrors :class:`dlm_sway.core.determinism.DeterminismSummary` but
+    lives here so :class:`SuiteResult` doesn't pull ``determinism`` as
+    an import-time dependency of ``core.result``.
+    """
+
+    class_: str
+    seed: int
+    notes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class SuiteResult:
     """A full run of a sway.yaml suite."""
 
@@ -91,6 +105,11 @@ class SuiteResult:
     null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
     """Per-primitive null-adapter baseline stats (mean, std, runs). Used
     to turn raw metrics into z-scores when rendering the report."""
+    determinism: DeterminismReport | None = None
+    """Classification of the determinism regime the suite ran under, from
+    :func:`dlm_sway.core.determinism.seed_everything`. ``None`` when the
+    caller bypassed seeding (e.g., unit tests constructing a
+    ``SuiteResult`` directly)."""
 
     @property
     def wall_seconds(self) -> float:
@@ -98,11 +117,15 @@ class SuiteResult:
 
 
 # Component weights for the composite score. Overridable in sway.yaml.
+# ``baseline`` is listed with weight 0.0 so the null-calibration row
+# appears in the report for transparency but contributes nothing to the
+# composite — it's an informational category, not a judgment one.
 DEFAULT_COMPONENT_WEIGHTS: dict[str, float] = {
     "adherence": 0.30,
     "attribution": 0.35,
     "calibration": 0.20,
     "ablation": 0.15,
+    "baseline": 0.0,
 }
 
 

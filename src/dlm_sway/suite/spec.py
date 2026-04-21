@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from dlm_sway.core.model import ModelSpec
+from dlm_sway.core.result import DEFAULT_COMPONENT_WEIGHTS
 
 SUPPORTED_VERSION = 1
 
@@ -39,6 +40,36 @@ class SuiteDefaults(BaseModel):
     backend can't do in-place toggling."""
     coverage_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.6
     """Minimum composite score for ``sway gate`` to pass."""
+    score_weights: dict[str, float] | None = None
+    """Per-category weight overrides for the composite score. ``None``
+    uses :data:`dlm_sway.core.result.DEFAULT_COMPONENT_WEIGHTS`. Keys
+    must be a subset of the known categories (``adherence``,
+    ``attribution``, ``calibration``, ``ablation``, ``baseline``);
+    unknown keys are rejected. Missing keys inherit the default weight
+    so a user who only wants to re-weight one category doesn't have to
+    respecify all of them. All values must be non-negative and at
+    least one must be positive."""
+
+    @field_validator("score_weights")
+    @classmethod
+    def _validate_weights(cls, v: dict[str, float] | None) -> dict[str, float] | None:
+        if v is None:
+            return v
+        known = set(DEFAULT_COMPONENT_WEIGHTS)
+        unknown = sorted(set(v) - known)
+        if unknown:
+            raise ValueError(
+                f"score_weights contains unknown category keys: {unknown}. "
+                f"Known categories: {sorted(known)}"
+            )
+        if any(w < 0.0 for w in v.values()):
+            raise ValueError("score_weights values must be non-negative")
+        # Merge with defaults so partial overrides are ergonomic.
+        merged = dict(DEFAULT_COMPONENT_WEIGHTS)
+        merged.update(v)
+        if sum(merged.values()) <= 0.0:
+            raise ValueError("score_weights must have at least one positive weight")
+        return merged
 
 
 class SwaySpec(BaseModel):

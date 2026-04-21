@@ -62,11 +62,16 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     comp_table.add_column(justify="left")
     comp_table.add_column(justify="right")
     comp_table.add_column()
+    comp_table.add_column(style="dim")
     for cat in ("adherence", "attribution", "calibration", "ablation", "baseline"):
         if cat not in score.components:
             continue
         v = score.components[cat]
-        comp_table.add_row(cat, f"{v:.2f}", _bar(v))
+        weight = score.weights.get(cat, 0.0)
+        # A zero-weight category contributes nothing to the composite;
+        # label it so users don't mistake the visible bar for judgment.
+        label = "(informational)" if weight == 0.0 else ""
+        comp_table.add_row(cat, f"{v:.2f}", _bar(v), label)
     c.print(comp_table)
 
     c.print()
@@ -98,7 +103,10 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             c.print(f"  {i}. {f}")
 
     c.print()
-    c.print(Text(f"wall: {suite.wall_seconds:.2f}s  |  sway {suite.sway_version}", style="dim"))
+    footer = f"wall: {suite.wall_seconds:.2f}s  |  sway {suite.sway_version}"
+    if suite.determinism is not None:
+        footer += f"  |  det: {suite.determinism.class_} (seed={suite.determinism.seed})"
+    c.print(Text(footer, style="dim"))
 
 
 def to_json(suite: SuiteResult, score: SwayScore) -> str:
@@ -111,6 +119,13 @@ def to_json(suite: SuiteResult, score: SwayScore) -> str:
 
 
 def _to_jsonable(suite: SuiteResult, score: SwayScore) -> dict[str, Any]:
+    determinism: dict[str, Any] | None = None
+    if suite.determinism is not None:
+        determinism = {
+            "class": suite.determinism.class_,
+            "seed": suite.determinism.seed,
+            "notes": list(suite.determinism.notes),
+        }
     return {
         "schema_version": 1,
         "sway_version": suite.sway_version,
@@ -120,6 +135,7 @@ def _to_jsonable(suite: SuiteResult, score: SwayScore) -> dict[str, Any]:
         "started_at": suite.started_at.isoformat(),
         "finished_at": suite.finished_at.isoformat(),
         "wall_seconds": suite.wall_seconds,
+        "determinism": determinism,
         "score": {
             "overall": score.overall,
             "band": score.band,
@@ -191,12 +207,19 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     buf.write(f"**Overall:** {score.overall:.2f} (`{score.band}`)  \n")
     buf.write(f"**Base:** `{suite.base_model_id}`  \n")
     buf.write(f"**Adapter:** `{_adapter_label(suite.adapter_id)}`  \n")
-    buf.write(f"**Wall:** {suite.wall_seconds:.2f}s  \n\n")
+    buf.write(f"**Wall:** {suite.wall_seconds:.2f}s  \n")
+    if suite.determinism is not None:
+        buf.write(
+            f"**Determinism:** `{suite.determinism.class_}` (seed={suite.determinism.seed})  \n"
+        )
+    buf.write("\n")
 
     buf.write("## Components\n\n")
-    buf.write("| category | score |\n|---|---:|\n")
+    buf.write("| category | score | weight | |\n|---|---:|---:|---|\n")
     for cat, v in score.components.items():
-        buf.write(f"| {cat} | {v:.2f} |\n")
+        weight = score.weights.get(cat, 0.0)
+        label = "(informational)" if weight == 0.0 else ""
+        buf.write(f"| {cat} | {v:.2f} | {weight:.2f} | {label} |\n")
     buf.write("\n## Probes\n\n")
     buf.write("| name | kind | verdict | score | z | note |\n|---|---|---|---:|---:|---|\n")
     for r in suite.probes:

@@ -115,4 +115,6 @@ def _load_custom(base_spec: ModelSpec, adapter: Path | None) -> DifferentialBack
     return instance
 
 
-__all__ = ["build"]
+from dlm_sway.backends.two_model import TwoModelDifferential, build_two_separate  # noqa: E402
+
+__all__ = ["TwoModelDifferential", "build", "build_two_separate"]

@@ -45,3 +45,78 @@ class TestSeedEverything:
             "CUBLAS_WORKSPACE_CONFIG" not in os.environ
             or os.environ["CUBLAS_WORKSPACE_CONFIG"] != ":4096:8"
         )
+
+
+class TestRunnerCallsSeedEverything:
+    """The runner must seed every RNG before any probe runs (P09)."""
+
+    def test_runner_populates_determinism_field(self) -> None:
+        from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
+        from dlm_sway.suite.runner import run as run_suite
+        from dlm_sway.suite.spec import SwaySpec
+
+        backend = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        spec = SwaySpec.model_validate(
+            {
+                "version": 1,
+                "models": {
+                    "base": {"base": "b"},
+                    "ft": {"base": "b", "adapter": "/tmp/a"},
+                },
+                "defaults": {"seed": 7},
+                "suite": [],
+            }
+        )
+        result = run_suite(spec, backend)
+        assert result.determinism is not None
+        assert result.determinism.seed == 7
+        assert result.determinism.class_ in {"strict", "best_effort", "loose"}
+
+    def test_runner_seeds_before_first_probe(self, monkeypatch) -> None:
+        """Reorder check: seed_everything must fire *before* the probe loop."""
+        from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
+        from dlm_sway.suite import runner as runner_mod
+        from dlm_sway.suite.spec import SwaySpec
+
+        events: list[str] = []
+
+        original_seed = runner_mod.seed_everything
+
+        def recording_seed(seed: int, *, strict: bool = True):
+            events.append(f"seed={seed}")
+            return original_seed(seed, strict=strict)
+
+        monkeypatch.setattr(runner_mod, "seed_everything", recording_seed)
+
+        # Use the dummy preflight as a probe stand-in: it runs *after*
+        # seeding in the runner, so its event lands after the seed event.
+        from dlm_sway.backends import dummy as dummy_mod
+
+        original_preflight = dummy_mod.DummyDifferentialBackend.preflight_finite_check
+
+        def recording_preflight(self):
+            events.append("preflight")
+            return original_preflight(self)
+
+        monkeypatch.setattr(
+            dummy_mod.DummyDifferentialBackend,
+            "preflight_finite_check",
+            recording_preflight,
+        )
+
+        backend = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        spec = SwaySpec.model_validate(
+            {
+                "version": 1,
+                "models": {
+                    "base": {"base": "b"},
+                    "ft": {"base": "b", "adapter": "/tmp/a"},
+                },
+                "defaults": {"seed": 11},
+                "suite": [],
+            }
+        )
+        runner_mod.run(spec, backend)
+        assert events.index("seed=11") < events.index("preflight"), (
+            f"seed must fire before preflight; got {events}"
+        )

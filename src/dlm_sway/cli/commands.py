@@ -35,10 +35,22 @@ def run_cmd(
         Path | None,
         typer.Option("--markdown", "-m", help="Write a markdown report to this path."),
     ] = None,
+    weights: Annotated[
+        str | None,
+        typer.Option(
+            "--weights",
+            help=(
+                "Override composite-score category weights. Format: "
+                "'adherence=0.4,attribution=0.3,calibration=0.2,ablation=0.1'. "
+                "Unspecified categories keep their defaults."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Execute a suite and render a terminal report."""
     try:
-        result, score_obj = _execute_spec(spec)
+        weights_override = _parse_weights_flag(weights)
+        result, score_obj = _execute_spec(spec, weights_override=weights_override)
     except SwayError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=2) from exc
@@ -68,10 +80,22 @@ def gate_cmd(
             help="Override the spec's coverage_threshold. Exit non-zero below it.",
         ),
     ] = None,
+    weights: Annotated[
+        str | None,
+        typer.Option(
+            "--weights",
+            help=(
+                "Override composite-score category weights. Format: "
+                "'adherence=0.4,attribution=0.3,calibration=0.2,ablation=0.1'. "
+                "Unspecified categories keep their defaults."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Execute a suite and exit non-zero on failure (CI gate)."""
     try:
-        result, score_obj = _execute_spec(spec)
+        weights_override = _parse_weights_flag(weights)
+        result, score_obj = _execute_spec(spec, weights_override=weights_override)
     except SwayError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=2) from exc
@@ -307,11 +331,21 @@ def _load_prompts(path: Path) -> tuple[str, ...]:
     )
 
 
-def _execute_spec(path: Path) -> tuple[SuiteResult, SwayScore]:
+def _execute_spec(
+    path: Path,
+    *,
+    weights_override: dict[str, float] | None = None,
+) -> tuple[SuiteResult, SwayScore]:
     """Load a spec, build a backend, run the suite, fold scores. Shared
     by ``run`` and ``gate``. Picks up .dlm-derived sections when the
-    spec's ``dlm_source`` is set."""
+    spec's ``dlm_source`` is set.
+
+    ``weights_override`` takes precedence over ``spec.defaults.score_weights``
+    (which itself takes precedence over the compile-time defaults). The
+    CLI hands through ``--weights k=v,k=v`` via this parameter.
+    """
     from dlm_sway.backends import build as build_backend
+    from dlm_sway.backends import build_two_separate
     from dlm_sway.suite.loader import load_spec
     from dlm_sway.suite.runner import run as run_suite
     from dlm_sway.suite.score import compute as compute_score
@@ -331,13 +365,46 @@ def _execute_spec(path: Path) -> tuple[SuiteResult, SwayScore]:
             # Honoring dlm_source is best-effort — probes that need
             # sections will SKIP with a pointer at the extra.
             sections = None
-    backend = build_backend(spec.models.ft)
+    if spec.defaults.differential:
+        backend: Any = build_backend(spec.models.ft)
+    else:
+        backend = build_two_separate(spec.models)
     try:
         result = run_suite(spec, backend, spec_path=str(path), sections=sections, doc_text=doc_text)
     finally:
         _close_if_possible(backend)
-    score_obj = compute_score(result)
+    effective_weights = weights_override or spec.defaults.score_weights
+    score_obj = compute_score(result, weights=effective_weights)
     return result, score_obj
+
+
+def _parse_weights_flag(raw: str | None) -> dict[str, float] | None:
+    """Parse ``--weights k=v,k=v`` into a dict; pydantic validates on use.
+
+    Returns ``None`` when the flag is empty / unset. Pydantic's
+    ``SuiteDefaults._validate_weights`` is re-invoked indirectly via
+    ``SwayScore`` — so any unknown category or negative value surfaces
+    the same error whether set in YAML or on the command line.
+    """
+    if not raw:
+        return None
+    out: dict[str, float] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise typer.BadParameter(
+                f"--weights: expected 'key=value' pairs, got {pair!r}. "
+                "Example: --weights adherence=0.4,attribution=0.3"
+            )
+        key, _, value = pair.partition("=")
+        key = key.strip()
+        try:
+            out[key] = float(value.strip())
+        except ValueError as exc:
+            raise typer.BadParameter(f"--weights: {value!r} for {key!r} is not a number") from exc
+    return out or None
 
 
 def _close_if_possible(backend: object) -> None:

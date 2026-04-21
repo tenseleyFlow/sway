@@ -21,8 +21,9 @@ from __future__ import annotations
 import time
 
 from dlm_sway import __version__
+from dlm_sway.core.determinism import seed_everything
 from dlm_sway.core.errors import ProbeError
-from dlm_sway.core.result import ProbeResult, SuiteResult, Verdict, utcnow
+from dlm_sway.core.result import DeterminismReport, ProbeResult, SuiteResult, Verdict, utcnow
 from dlm_sway.core.scoring import DifferentialBackend, PreflightCheckable
 from dlm_sway.core.sections import Section
 from dlm_sway.probes.base import RunContext, build_probe
@@ -52,6 +53,19 @@ def run(
     test suites where the cost matters); the default is to run it.
     """
     started = utcnow()
+
+    # Seed every RNG sway's probes touch before any backend work runs.
+    # ``strict=True`` asks torch for deterministic algorithms and sets
+    # CUBLAS_WORKSPACE_CONFIG; this is a no-op when torch is absent, so
+    # callers without the ``hf`` extra still get a seeded python/numpy
+    # state and a ``best_effort`` classification in the report.
+    det_summary = seed_everything(spec.defaults.seed, strict=True)
+    determinism = DeterminismReport(
+        class_=det_summary.class_,
+        seed=det_summary.seed,
+        notes=det_summary.notes,
+    )
+
     ctx = RunContext(
         backend=backend,
         seed=spec.defaults.seed,
@@ -93,6 +107,7 @@ def run(
                 sway_version=__version__,
                 probes=tuple(results),
                 null_stats={},
+                determinism=determinism,
             )
 
     # Pre-extract suite kinds so each probe sees only what's *after* it.
@@ -174,6 +189,7 @@ def run(
         sway_version=__version__,
         probes=tuple(results),
         null_stats=null_stats,
+        determinism=determinism,
     )
 
 
