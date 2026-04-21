@@ -34,12 +34,17 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from dlm_sway.core.errors import SwayError
-from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
+# F19 — heavy imports are deferred to call sites so pytest's plugin
+# discovery doesn't load ``dlm_sway.core.result`` (and everything below
+# it: pydantic, numpy) for users who haven't invoked
+# ``@pytest.mark.sway``. The plugin registers as ``pytest11`` on
+# install; the tax should only be paid by tests that actually use it.
 
 if TYPE_CHECKING:
     from _pytest.config import Config
     from _pytest.nodes import Item
+
+    from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore
 
 
 # ----------------------------------------------------------------------
@@ -223,6 +228,7 @@ def _expand_to_probe_items(
     first item's ``runtest``. Collection stays fast; failures don't
     appear until `pytest` actually runs the test.
     """
+    from dlm_sway.core.errors import SwayError
     from dlm_sway.suite.loader import load_spec
 
     parent = parent_item.parent
@@ -393,6 +399,8 @@ def _find_probe(suite: SuiteResult, name: str) -> ProbeResult | None:
 
 def _apply_verdict(probe: ProbeResult) -> None:
     """Translate a probe's :class:`Verdict` to a pytest outcome."""
+    from dlm_sway.core.result import Verdict
+
     msg = probe.message or ""
     if probe.verdict == Verdict.PASS:
         return
