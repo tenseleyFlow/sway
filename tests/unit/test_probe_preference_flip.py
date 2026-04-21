@@ -180,6 +180,103 @@ def test_warn_branch_score_formula_pinned() -> None:
     assert result.evidence["total"] == 3
 
 
+def test_one_bad_triple_does_not_kill_the_batch() -> None:
+    """B14: a triple that raises ProbeError is dropped, not propagated.
+
+    The remaining triples still produce a verdict; the dropped count
+    surfaces in evidence so a user can see what got skipped.
+    """
+    from dlm_sway.core.errors import ProbeError
+
+    backend = _backend(
+        [
+            ("p1", "good1", "bad1", -2.0, 2.0),
+            ("p2", "good2", "bad2", -1.5, 1.0),
+            ("p3", "good3", "bad3", -0.5, 0.8),
+        ]
+    )
+
+    # Wrap the backend's logprob_of so the second triple raises.
+    raising = {"p2"}
+    original_as_base = backend.as_base
+    original_as_finetuned = backend.as_finetuned
+
+    def _raising_view(view_cm):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _wrap():
+            with view_cm() as view:
+                orig = view.logprob_of
+
+                def fenced(prompt, completion):
+                    if prompt in raising:
+                        raise ProbeError("logprob_of", f"simulated failure on {prompt!r}")
+                    return orig(prompt, completion)
+
+                view.logprob_of = fenced  # type: ignore[method-assign]
+                yield view
+
+        return _wrap
+
+    backend.as_base = _raising_view(original_as_base)  # type: ignore[method-assign]
+    backend.as_finetuned = _raising_view(original_as_finetuned)  # type: ignore[method-assign]
+
+    triples = [
+        {"prompt": p, "chosen": c, "rejected": r}
+        for p, c, r in [("p1", "good1", "bad1"), ("p2", "good2", "bad2"), ("p3", "good3", "bad3")]
+    ]
+    probe, spec = build_probe(
+        {
+            "name": "pf",
+            "kind": "preference_flip",
+            "triples": triples,
+            "assert_flip_rate_gte": 0.7,
+            "min_triples_for_decision": 2,
+        }
+    )
+    ctx = RunContext(backend=backend)
+    result = probe.run(spec, ctx)
+
+    assert result.verdict == Verdict.PASS  # the two surviving triples both flipped
+    assert result.evidence["dropped_triples"] == 1
+    assert any("p2" in reason for reason in result.evidence["dropped_reasons"])
+
+
+def test_all_triples_failing_yields_error() -> None:
+    """When every triple raises, the probe routes to ERROR with an explanation."""
+    from contextlib import contextmanager
+
+    from dlm_sway.core.errors import ProbeError
+
+    backend = _backend([("p1", "g", "b", 0.0, 0.0)])
+    inner_as_base = backend.as_base  # capture before monkeypatching
+
+    @contextmanager
+    def _always_raise():
+        with inner_as_base() as view:
+
+            def _raises(*_a, **_k):
+                raise ProbeError("logprob_of", "always")
+
+            view.logprob_of = _raises  # type: ignore[method-assign]
+            yield view
+
+    backend.as_base = _always_raise  # type: ignore[method-assign]
+    backend.as_finetuned = _always_raise  # type: ignore[method-assign]
+
+    probe, spec = build_probe(
+        {
+            "name": "pf",
+            "kind": "preference_flip",
+            "triples": [{"prompt": "p1", "chosen": "g", "rejected": "b"}],
+        }
+    )
+    result = probe.run(spec, RunContext(backend=backend))
+    assert result.verdict == Verdict.ERROR
+    assert result.evidence["dropped_triples"] == 1
+
+
 def test_triples_pulled_from_sections() -> None:
     pref_section = Section(
         id="p1",
