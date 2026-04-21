@@ -57,6 +57,41 @@ class TestAligned:
         assert abs(p.sum() - 1.0) < 1e-9
         assert abs(q.sum() - 1.0) < 1e-9
 
+    def test_disjoint_top_k_supports_produce_finite_divergence(self) -> None:
+        """C12: base peaks on {1,2,3}, ft peaks on {7,8,9}. The aligned
+        probabilities have 6 entries (union), with tail-mass redistributed
+        to each side's missing tokens via the ``tail_logprob`` fallback.
+        Divergence must be finite, positive, and close to ln(2) (the JS
+        bound for distributions with disjoint support)."""
+        base = TokenDist(
+            token_ids=np.asarray([1, 2, 3], dtype=np.int64),
+            logprobs=np.log(np.asarray([0.6, 0.25, 0.15], dtype=np.float32)),
+            vocab_size=1000,
+            # Top-3 covers all of base; tail is effectively zero.
+            tail_logprob=float(math.log(1e-9)),
+        )
+        ft = TokenDist(
+            token_ids=np.asarray([7, 8, 9], dtype=np.int64),
+            logprobs=np.log(np.asarray([0.5, 0.3, 0.2], dtype=np.float32)),
+            vocab_size=1000,
+            tail_logprob=float(math.log(1e-9)),
+        )
+        p, q = aligned_probs(base, ft)
+        # Union of {1,2,3} and {7,8,9} is 6 tokens.
+        assert p.shape == (6,)
+        assert q.shape == (6,)
+        # Both distributions should be (approximately) normalized — any
+        # tail redistribution leaves a small residual below 1e-3.
+        assert abs(p.sum() - 1.0) < 1e-3
+        assert abs(q.sum() - 1.0) < 1e-3
+
+        d = divergence(base, ft, kind="js")
+        assert math.isfinite(d)
+        assert d > 0.0
+        # Fully disjoint support → JS approaches its ln(2) upper bound.
+        assert d < math.log(2.0) + 1e-6
+        assert d > 0.5  # meaningfully above zero
+
 
 class TestKL:
     def test_zero_when_equal(self) -> None:
