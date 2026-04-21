@@ -427,13 +427,11 @@ class ApiScoringBackend:
                     f"api returned non-JSON body: {response.text[:200]}",
                 ) from exc
 
-        for attempt in retrying:
-            with attempt:
-                return _once()
-        # retrying generators always yield at least once; if we reach
-        # here the retry loop exhausted itself, which tenacity surfaces
-        # via RetryError — defensive fallback.
-        raise ProbeError("api.http", "retry loop exhausted without returning a response")
+        # ``Retrying`` is callable — delegating keeps the control flow
+        # linear and avoids the post-loop unreachable branch mypy
+        # otherwise demands. On exhausted retries tenacity re-raises
+        # the last exception (``reraise=True`` in ``_build_retrier``).
+        return retrying(_once)  # type: ignore[no-any-return]
 
     # -- Instrumentation passthrough (for S07 cache + stats) -----------
 
