@@ -538,6 +538,7 @@ class ReportFormat(StrEnum):
     MARKDOWN_LONG = "markdown"  # alias kept for muscle memory
     JUNIT = "junit"
     JSON = "json"
+    HTML = "html"
 
 
 def report_cmd(
@@ -546,9 +547,20 @@ def report_cmd(
         ReportFormat,
         typer.Option(
             "--format",
-            help="Output format: terminal, md (alias: markdown), junit, or json.",
+            help="Output format: terminal, md (alias: markdown), junit, json, or html.",
         ),
     ] = ReportFormat.TERMINAL,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            "-o",
+            help=(
+                "Write the rendered output to this path instead of stdout. "
+                "Required for --format html (Plotly's inlined JS is ~3 MB)."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Re-render a previously saved run (for history tracking / dashboards).
 
@@ -556,7 +568,7 @@ def report_cmd(
     ``(SuiteResult, SwayScore)`` pair via :func:`report.from_json`,
     then routes through the same renderers as a fresh ``sway run``.
     Single source for every format keeps terminal / md / junit /
-    json output identical regardless of where they came from (B16).
+    json / html output identical regardless of where they came from (B16).
     """
     from dlm_sway.suite import report
 
@@ -567,18 +579,57 @@ def report_cmd(
         # via to_json against the round-tripped pair so any schema
         # additions land consistently.
         suite, score = report.from_json(raw)
-        typer.echo(report.to_json(suite, score))
+        _emit(report.to_json(suite, score), out)
         return
 
     suite, score = report.from_json(raw)
     if format in (ReportFormat.MARKDOWN, ReportFormat.MARKDOWN_LONG):
-        typer.echo(report.to_markdown(suite, score))
+        _emit(report.to_markdown(suite, score), out)
         return
     if format is ReportFormat.JUNIT:
-        typer.echo(report.to_junit(suite, score))
+        _emit(report.to_junit(suite, score), out)
+        return
+    if format is ReportFormat.HTML:
+        try:
+            from dlm_sway.suite import report_html
+        except ImportError as exc:  # pragma: no cover — graceful install hint
+            typer.echo(f"sway report --format html: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        try:
+            html_text = report_html.to_html(suite, score)
+        except RuntimeError as exc:
+            typer.echo(f"sway report --format html: {exc}", err=True)
+            raise typer.Exit(code=2) from exc
+        if out is None:
+            # Refuse to dump 3 MB of HTML to stdout by default — the
+            # user almost always wants a file.
+            typer.echo(
+                "sway report --format html requires --out PATH "
+                "(Plotly JS bundle is ~3 MB; stdout is not an HTML viewer)",
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        out.write_text(html_text, encoding="utf-8")
+        typer.echo(f"wrote HTML → {out}", err=True)
         return
     # ReportFormat.TERMINAL.
+    if out is not None:
+        typer.echo(
+            "sway report --format terminal does not support --out; "
+            "use --format md or --format html for file output.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
     report.to_terminal(suite, score, console=Console())
+
+
+def _emit(text: str, out: Path | None) -> None:
+    """Either write to the target path or ``typer.echo`` to stdout."""
+    if out is None:
+        typer.echo(text)
+    else:
+        out.write_text(text, encoding="utf-8")
+        typer.echo(f"wrote {out}", err=True)
 
 
 class CompareFormat(StrEnum):
