@@ -44,8 +44,27 @@ class TestTokenDist:
             logprobs=np.array([-0.1, -1.0, -3.0], dtype=np.float32),
             vocab_size=50_257,
         )
-        assert dist.tail_logprob == 0.0
+        # B6: default tail_logprob is None ("no tail recorded"), not
+        # 0.0 (which now means "tail underflowed to zero, but exists").
+        assert dist.tail_logprob is None
         assert dist.token_ids.shape == (3,)
+
+    def test_explicit_tail_distinguishes_zero_from_none(self) -> None:
+        """B6: 0.0 means measurable-but-tiny; None means no tail at all."""
+        d_no_tail = TokenDist(
+            token_ids=np.array([1], dtype=np.int64),
+            logprobs=np.array([0.0], dtype=np.float32),
+            vocab_size=1,
+            tail_logprob=None,
+        )
+        d_underflow = TokenDist(
+            token_ids=np.array([1], dtype=np.int64),
+            logprobs=np.array([0.0], dtype=np.float32),
+            vocab_size=1,
+            tail_logprob=0.0,
+        )
+        assert d_no_tail.tail_logprob is None
+        assert d_underflow.tail_logprob == 0.0
 
 
 class TestProtocols:
