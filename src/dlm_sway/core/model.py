@@ -21,11 +21,12 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-BackendKind = Literal["hf", "mlx", "dummy", "custom"]
+BackendKind = Literal["hf", "mlx", "api", "dummy", "custom"]
 """Registered scoring-backend kinds.
 
-``custom`` is an escape hatch — the runner looks up an entry point when
-it sees ``custom`` in a spec.
+``api`` targets an OpenAI-compatible HTTP endpoint (OpenAI, vLLM
+serve, Ollama). ``custom`` is an escape hatch — the runner looks up
+an entry point when it sees ``custom`` in a spec.
 """
 
 
@@ -55,6 +56,15 @@ class ModelSpec(BaseModel):
     entry_point: str | None = Field(default=None)
     """Required when ``kind='custom'``. Import path like
     ``mypkg.mybackend:MyBackend``."""
+
+    endpoint: str | None = Field(default=None)
+    """Required when ``kind='api'``. Base URL of an OpenAI-compatible
+    completions server (``https://api.openai.com``,
+    ``http://localhost:11434`` for Ollama, or wherever ``vllm serve``
+    listens). The ``/v1/completions`` path is appended by the backend.
+
+    The API key comes from the environment (``SWAY_API_KEY``, falling
+    back to ``OPENAI_API_KEY``) so secrets don't live in the YAML spec."""
 
     @field_validator("adapter")
     @classmethod
