@@ -276,19 +276,22 @@ class TestProbe:
         r = probe.run(fresh_spec, RunContext(backend=backend))
         assert r.evidence["from_cache"] is False
 
-    def test_std_floor_prevents_runaway_zscore(self) -> None:
-        """C9: identical raws across seeds → std=0 → clamped to 1e-6.
+    def test_degenerate_calibration_flagged_and_refused(self) -> None:
+        """F02 (Audit 03): identical raws or runs≤1 → ``degenerate: 1.0``
+        in the stats dict, and the downstream z-score computation
+        refuses instead of firing on a 1e-6 floor.
 
-        Use a single-run calibration (no variance by construction) to
-        force the degenerate case; the runner must still publish the
-        kind with a non-zero std so downstream z-scores stay finite.
+        Pre-F02 this test asserted ``std ≥ 1e-6`` + ``z is not None``,
+        which is exactly the contract that produced the audit's
+        +290,766σ observation on a leakage probe under ``runs: 1``.
+        The fix flips both assertions.
         """
         backend = _diverging_backend()
         probe, spec = build_probe(
             {
                 "name": "null",
                 "kind": "null_adapter",
-                "runs": 1,  # single seed → std=0
+                "runs": 1,  # single seed → degenerate by construction
                 "calibrate_kinds": ["delta_kl"],
             }
         )
@@ -296,13 +299,15 @@ class TestProbe:
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.PASS
         stats = result.evidence["null_stats"]["delta_kl"]
-        assert stats["std"] >= 1e-6
-        # And the downstream z-score computation is finite, not inf.
+        # Std floor is still 1e-6 (preserved for valid-but-tight
+        # multi-seed nulls). What changed is the explicit
+        # ``degenerate`` flag on the stats dict — ``runs: 1`` → True.
+        assert stats["std"] == 1e-6
+        assert stats["degenerate"] >= 0.5
+        # Downstream z_score now refuses rather than emit runaway values.
         from dlm_sway.probes._zscore import z_score
 
-        z = z_score(0.5, stats)
-        assert z is not None
-        assert np.isfinite(z)
+        assert z_score(0.5, stats) is None
 
     def test_per_kind_stats_published(self) -> None:
         """Every calibrating kind gets its own (mean, std, n) triple."""

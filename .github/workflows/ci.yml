@@ -18,6 +18,15 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# F08 (Audit 03) — opt into Node.js 24 for javascript-based actions
+# (actions/checkout@v4, astral-sh/setup-uv@v6, dorny/paths-filter@v3
+# all ship Node 20 today; deadline is June 2026). This env applies
+# workflow-wide and silences the deprecation warning block each job
+# log currently carries. Remove once every action we pull bumps to
+# Node 24 in its own tag and we can drop the env override.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   fast-lane:
     # Unit tests + lint + type check. Runs on every push, every PR.

@@ -341,14 +341,25 @@ def _calibrate_at_rank(
 
         if raws:
             mean = statistics.fmean(raws)
-            std = statistics.pstdev(raws) if len(raws) > 1 else 0.0
+            raw_std = statistics.pstdev(raws) if len(raws) > 1 else 0.0
+            # F02 (Audit 03) — detect the degenerate case (``runs: 1``
+            # or every seed producing the *exact* same raw) as a first-
+            # class property of the stats dict. The previous code hid
+            # this via ``max(std, 1e-6)`` which collided with
+            # :data:``_zscore.MIN_STD`` and let the z-score path fire
+            # on a std that had been synthetically lifted from ``0.0``
+            # — the path that produced the ``+290,766σ`` observation in
+            # the audit. A multi-seed run with genuinely small variance
+            # (e.g. 5e-7 on a low-noise dummy) is NOT degenerate; we
+            # keep the 1e-6 floor for that case so valid-but-tight
+            # calibrations still z-score. ``z_score`` inspects both the
+            # ``degenerate`` flag and the ``std < MIN_STD`` threshold.
+            degenerate = len(raws) <= 1 or raw_std == 0.0
             per_kind_stats[kind] = {
                 "mean": mean,
-                # C9: clamp the std floor so the downstream z-score
-                # path doesn't blow up when every seed produces
-                # identical raws.
-                "std": max(std, 1e-6),
+                "std": max(raw_std, 1e-6),
                 "n": float(len(raws)),
+                "degenerate": 1.0 if degenerate else 0.0,
             }
             per_kind_samples[kind] = raws
         else:

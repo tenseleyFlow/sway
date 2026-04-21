@@ -38,15 +38,25 @@ def _dist_from_probs(probs: list[float]) -> TokenDist:
 
 class TestMineOutliers:
     def test_ranks_prompts_by_per_prompt_divergence(self) -> None:
-        """Three prompts with planted divergences: ``hi`` has the
-        biggest gap, ``lo`` the smallest. Top-1 = hi, bottom-1 = lo."""
+        """Six prompts with planted divergences: ``hi*`` have the biggest
+        gap, ``lo*`` the smallest, ``mid*`` in between. Top-K = hi rows,
+        bottom-K = lo rows."""
         base = _dist_from_probs([0.92, 0.02, 0.02, 0.02, 0.02])
         ft_flat = _dist_from_probs([0.25, 0.20, 0.20, 0.20, 0.15])  # big KL
         ft_mild = _dist_from_probs([0.70, 0.10, 0.10, 0.05, 0.05])  # mid KL
         ft_same = base  # zero KL
 
-        base_dists = {"hi": base, "mid": base, "lo": base}
-        ft_dists = {"hi": ft_flat, "mid": ft_mild, "lo": ft_same}
+        # F04 — need ≥ 2·top_k=4 distinct prompts to clear the guard.
+        prompts = ["hi1", "hi2", "mid1", "mid2", "lo1", "lo2"]
+        base_dists = dict.fromkeys(prompts, base)
+        ft_dists = {
+            "hi1": ft_flat,
+            "hi2": ft_flat,
+            "mid1": ft_mild,
+            "mid2": ft_mild,
+            "lo1": ft_same,
+            "lo2": ft_same,
+        }
         backend = DummyDifferentialBackend(
             base=DummyResponses(token_dists=base_dists),
             ft=DummyResponses(token_dists=ft_dists),
@@ -54,37 +64,64 @@ class TestMineOutliers:
 
         result = mine_outliers(
             probe_kind="delta_kl",
-            candidate_prompts=["hi", "mid", "lo"],
+            candidate_prompts=prompts,
             backend=backend,
-            top_k=3,
+            top_k=2,
         )
 
         assert isinstance(result, OutlierResult)
         assert result.probe_kind == "delta_kl"
-        # Top is ordered most-positive first.
-        assert [c.prompt for c in result.top] == ["hi", "mid", "lo"]
-        # Bottom is ordered least-positive first.
-        assert [c.prompt for c in result.bottom] == ["lo", "mid", "hi"]
+        # Top is most-positive first; bottom is least-positive first.
+        top_prompts = {c.prompt for c in result.top}
+        bottom_prompts = {c.prompt for c in result.bottom}
+        assert top_prompts == {"hi1", "hi2"}
+        assert bottom_prompts == {"lo1", "lo2"}
         # Raw values are finite and positive (JS divergence ≥ 0).
         for c in result.top:
             assert math.isfinite(c.raw)
             assert c.raw >= 0.0
 
-    def test_top_k_clipped_to_pool_size(self) -> None:
+    def test_small_pool_raises_f04_guard(self) -> None:
+        """F04 (Audit 03) — pool below ``2·top_k`` distinct prompts
+        raises SwayError with an actionable hint. Replaces pre-F04
+        'test_top_k_clipped_to_pool_size' which relied on the same
+        degenerate single-prompt case the audit flagged as produced
+        top=[p], bottom=[p] — identical lists."""
+        from dlm_sway.core.errors import SwayError
+
         base = _dist_from_probs([0.92, 0.02, 0.02, 0.02, 0.02])
         ft = _dist_from_probs([0.25, 0.20, 0.20, 0.20, 0.15])
         backend = DummyDifferentialBackend(
             base=DummyResponses(token_dists={"p": base}),
             ft=DummyResponses(token_dists={"p": ft}),
         )
-        result = mine_outliers(
-            probe_kind="delta_kl",
-            candidate_prompts=["p"],
-            backend=backend,
-            top_k=10,
+        with pytest.raises(SwayError, match="below the 2·top_k"):
+            mine_outliers(
+                probe_kind="delta_kl",
+                candidate_prompts=["p"],
+                backend=backend,
+                top_k=10,
+            )
+
+    def test_small_pool_error_suggests_smaller_top_k(self) -> None:
+        """The error message includes a concrete ``--top-k N`` hint the
+        user can copy into their CLI invocation."""
+        from dlm_sway.core.errors import SwayError
+
+        base = _dist_from_probs([0.92, 0.02, 0.02, 0.02, 0.02])
+        ft = _dist_from_probs([0.25, 0.20, 0.20, 0.20, 0.15])
+        prompts = ["p1", "p2", "p3"]
+        backend = DummyDifferentialBackend(
+            base=DummyResponses(token_dists=dict.fromkeys(prompts, base)),
+            ft=DummyResponses(token_dists=dict.fromkeys(prompts, ft)),
         )
-        assert len(result.top) == 1
-        assert len(result.bottom) == 1
+        with pytest.raises(SwayError, match="Pass --top-k 1"):
+            mine_outliers(
+                probe_kind="delta_kl",
+                candidate_prompts=prompts,
+                backend=backend,
+                top_k=5,
+            )
 
     def test_empty_pool_returns_empty_result(self) -> None:
         backend = DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
@@ -99,8 +136,9 @@ class TestMineOutliers:
 
     def test_unsupported_probe_kind_returns_empty(self) -> None:
         """Probes that need a non-``prompts`` spec (leakage, etc.) skip
-        every candidate silently. S17 scope is delta_kl; other probes
-        are documented as future work."""
+        every candidate silently. The F04 floor doesn't fire in that
+        case because the scored list is empty — empty-result path
+        preserved for the unsupported-kind UX."""
         base = _dist_from_probs([0.92, 0.02, 0.02, 0.02, 0.02])
         ft = _dist_from_probs([0.25, 0.20, 0.20, 0.20, 0.15])
         backend = DummyDifferentialBackend(

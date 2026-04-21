@@ -108,6 +108,31 @@ def mine_outliers(
             continue
         scored.append(OutlierCandidate(prompt=candidate, raw=raw, index=idx))
 
+    # F04 (Audit 03) — reject pools smaller than ``2 * top_k`` distinct
+    # scored prompts. Below that floor the "top" and "bottom" lists
+    # end up overlapping (same prompt can appear in both) and the
+    # output loses the outlier-vs-norm contrast the miner is supposed
+    # to surface. The audit observed this on a 1-distinct-prompt pool
+    # where the top and bottom lists both contained that single prompt.
+    #
+    # Apply AFTER scoring so unsupported probe_kinds (no prompts get
+    # scored → scored=[]) return an empty OutlierResult cleanly
+    # instead of raising. The empty-result contract is established by
+    # pre-F04 tests and load-bearing for probe-kind-not-supported UX.
+    if scored:
+        distinct_count = len({c.prompt for c in scored})
+        required = 2 * top_k
+        if distinct_count < required:
+            from dlm_sway.core.errors import SwayError
+
+            suggested = max(1, distinct_count // 2)
+            raise SwayError(
+                f"outlier miner pool has {distinct_count} distinct prompt(s), "
+                f"below the 2·top_k={required} floor — ``top`` and ``bottom`` "
+                f"lists would overlap. Pass --top-k {suggested} or supply "
+                f"--from-corpus to widen the pool."
+            )
+
     # Top = most positive raw; bottom = most negative raw. These
     # differ for signed metrics (external_perplexity deltas can be
     # negative; delta_kl is ≥ 0 but the bottom-K still finds the

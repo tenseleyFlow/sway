@@ -102,11 +102,103 @@ def write_sway_yaml(dlm_path: Path, out: Path) -> None:
             f"{dlm_path}: no trained adapter found at ~/.dlm/store/{handle.dlm_id}/adapter; "
             "train the document with `dlm train` before generating a sway suite."
         )
-    spec = build_spec_dict(handle, dlm_source=str(dlm_path.resolve()))
-    out.write_text(_render_annotated_yaml(spec, handle, dlm_path), encoding="utf-8")
+    spec = build_spec_dict(handle, dlm_source=_portable_dlm_source(dlm_path))
+    skipped = collect_skipped_probe_reasons(handle)
+    out.write_text(
+        _render_annotated_yaml(spec, handle, dlm_path, skipped=skipped),
+        encoding="utf-8",
+    )
 
 
-def _render_annotated_yaml(spec: dict[str, Any], handle: DlmHandle, dlm_path: Path) -> str:
+def collect_skipped_probe_reasons(handle: DlmHandle) -> list[tuple[str, str]]:
+    """Return ``(probe_kind, reason)`` tuples for every probe
+    ``_build_suite`` intentionally omitted for this ``.dlm``.
+
+    F07 (Audit 03) — the emitted YAML previously had no record of
+    which probes were skipped and why. Users had to diff the autogen
+    output against the intent docstring to know. This surface is the
+    input to the YAML-comment block the renderer prepends.
+
+    Mirrors the conditional logic inside :func:`_build_suite` — any
+    change to that function's gating must update this function too.
+    """
+    sections = handle.sections
+    instruction_probes = [
+        (p.prompt, p.gold) for s in sections if s.kind == "instruction" for p in s.probes
+    ]
+    prose_prompts = [
+        s.content.split(".")[0].strip()
+        for s in sections
+        if s.kind == "prose" and s.content.strip() and s.content.split(".")[0].strip()
+    ]
+    has_instruction_probes = bool(instruction_probes)
+    has_prose = any(s.kind == "prose" for s in sections)
+    has_preferences = any(s.kind == "preference" and s.preferences for s in sections)
+
+    kl_prompts = [q for q, _ in instruction_probes][:16] or prose_prompts[:16]
+    all_instruction_prompts = [q for q, _ in instruction_probes]
+    cluster_pool_size = len({*all_instruction_prompts, *prose_prompts})
+
+    skipped: list[tuple[str, str]] = []
+    if not kl_prompts:
+        skipped.append(("delta_kl", "no instruction probes or prose sections"))
+    if not has_instruction_probes:
+        skipped.append(("adapter_revert", "no !probe markers in INSTRUCTION sections"))
+        skipped.append(("paraphrase_invariance", "no !probe markers in INSTRUCTION sections"))
+    if not kl_prompts:
+        skipped.append(("prompt_collapse", "no prompts available to score"))
+    if len(sections) < 2:
+        skipped.append(("section_internalization", "document has fewer than 2 sections"))
+    if not has_preferences:
+        skipped.append(("preference_flip", "no PREFERENCE sections with populated triples"))
+    if not has_prose:
+        skipped.append(
+            ("external_perplexity", "no PROSE sections to measure external-corpus drift against")
+        )
+        skipped.append(("leakage", "no PROSE sections to extract prefix/continuation windows from"))
+    if cluster_pool_size < 20:
+        skipped.append(
+            (
+                "cluster_kl",
+                f"only {cluster_pool_size} distinct prompts in pool (need ≥ 20 for stable clustering)",
+            )
+        )
+    if not kl_prompts:
+        skipped.append(("adapter_ablation", "no prompts available to score"))
+    return skipped
+
+
+def _portable_dlm_source(dlm_path: Path) -> str:
+    """Return a ``dlm_source`` string that survives cross-machine checkout.
+
+    F09 (Audit 03) — the pre-fix code unconditionally wrote an
+    absolute path (``/Users/mfwolffe/.../fortran.dlm``) which breaks
+    when the autogen'd ``sway.yaml`` is committed to a repo and
+    re-run from a different working tree (CI agents, another dev's
+    checkout). The cwd-relative form is round-trippable across
+    machines; only fall back to absolute when the ``.dlm`` lives
+    outside the cwd (e.g. a global user dir) where relativization
+    doesn't resolve on a fresh checkout.
+    """
+    abs_path = dlm_path.resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        # ``is_relative_to`` lands in 3.9+; this path is guaranteed
+        # to exist because sway requires ``>=3.11``.
+        if abs_path.is_relative_to(cwd):
+            return str(abs_path.relative_to(cwd))
+    except ValueError:
+        pass
+    return str(abs_path)
+
+
+def _render_annotated_yaml(
+    spec: dict[str, Any],
+    handle: DlmHandle,
+    dlm_path: Path,
+    *,
+    skipped: list[tuple[str, str]] | None = None,
+) -> str:
     """Render the spec as YAML with a provenance header + per-probe intent lines (D5).
 
     Uses pyyaml (already a hard dep) and post-processes the output to
@@ -114,6 +206,11 @@ def _render_annotated_yaml(spec: dict[str, Any], handle: DlmHandle, dlm_path: Pa
     ``ruamel.yaml`` dep the sprint contemplated — the annotation here
     is structural (position-based), not round-trippable, so the lighter
     approach is sufficient.
+
+    F07 (Audit 03) — when ``skipped`` is non-empty, the header gains a
+    ``# skipped: <probe> (<reason>)`` block so users see which probes
+    the autogen intentionally omitted, without diffing the autogen
+    module's docstring.
     """
     import datetime as _dt
 
@@ -134,8 +231,17 @@ def _render_annotated_yaml(spec: dict[str, Any], handle: DlmHandle, dlm_path: Pa
         "# Edit freely — this file is your checked-in contract. Re-running",
         "# `sway autogen` overwrites it; commit the generated file so your",
         "# test suite is diffable in PRs.",
-        "",
     ]
+    if skipped:
+        header_lines.extend(
+            [
+                "#",
+                f"# {len(skipped)} probe(s) intentionally omitted for this document:",
+                *[f"# skipped: {kind} ({reason})" for kind, reason in skipped],
+                "# (sway gate will still pass — missing probes don't fail the gate.)",
+            ]
+        )
+    header_lines.append("")
     return "\n".join(header_lines) + annotated
 
 

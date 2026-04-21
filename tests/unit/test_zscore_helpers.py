@@ -63,6 +63,21 @@ class TestZScore:
         z = z_score(1.0, stats)
         assert z is not None
 
+    def test_degenerate_flag_rejects_even_valid_std(self) -> None:
+        """F02 (Audit 03) — when null_adapter marks stats as degenerate
+        (``runs: 1`` or coincidentally-identical seeds), ``z_score``
+        refuses to divide even though the floored std passes MIN_STD.
+        This is what prevents the observed ``+290,766σ`` output on a
+        ``runs: 1`` leakage probe."""
+        stats = {"mean": 0.01, "std": MIN_STD, "degenerate": 1.0}
+        assert z_score(0.30, stats) is None
+
+    def test_non_degenerate_flag_does_not_change_behavior(self) -> None:
+        """A ``degenerate: 0.0`` marker on an otherwise-valid stats
+        dict behaves identically to the no-marker path."""
+        stats = {"mean": 0.01, "std": 0.01, "degenerate": 0.0}
+        assert z_score(0.08, stats) is not None
+
 
 class TestVerdictFromZ:
     def test_pass_at_threshold(self) -> None:

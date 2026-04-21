@@ -137,6 +137,37 @@ def collect_missing_extras(suite: SuiteResult) -> list[str]:
     return sorted(found)
 
 
+def collect_degenerate_null_kinds(suite: SuiteResult) -> list[str]:
+    """Probe kinds whose null-calibration stats were flagged degenerate.
+
+    ``null_adapter`` marks a kind's stats with ``degenerate: 1.0`` when
+    the calibration ran but the baseline was too narrow for the z-score
+    path to fire (``runs: 1``, or a multi-seed run whose raws collapsed
+    to an effectively-zero variance — F02 from Audit 03). Unlike
+    :func:`collect_null_opt_outs` (which surfaces probes that opted
+    out at spec-build time), this surface catches the case where the
+    null *did* run but wasn't useful. Both cases fall back to fixed
+    thresholds; the report distinguishes them so users can act:
+    ``opt_out`` → expected for probes like ``adapter_revert``;
+    ``degenerate`` → bump ``runs:`` in the spec.
+    """
+    found: set[str] = set()
+    for probe in suite.probes:
+        if probe.kind != "null_adapter":
+            continue
+        # ``null_adapter`` writes per-kind stats into
+        # ``SuiteResult.null_stats``, not the probe's evidence — the
+        # suite-level field is the canonical place the runner threads
+        # calibration across probes.
+        stats_by_kind = suite.null_stats or {}
+        for kind, kind_stats in stats_by_kind.items():
+            if not isinstance(kind_stats, dict):
+                continue
+            if kind_stats.get("degenerate", 0.0) >= 0.5:
+                found.add(kind)
+    return sorted(found)
+
+
 def collect_null_opt_outs(suite: SuiteResult) -> list[str]:
     """Probe kinds that opted out of null calibration.
 
@@ -262,6 +293,22 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             Text(
                 f"{len(opt_outs)} probe(s) opted out of null calibration "
                 f"(using fixed thresholds): {', '.join(opt_outs)}",
+                style="dim",
+            )
+        )
+
+    # F02 (Audit 03): null-calibration-degenerate rollup. Distinct from
+    # opt-outs — the null *did* run, but its baseline was too narrow
+    # (``runs: 1`` or coincidentally-identical seeds). Users see this
+    # and bump ``runs:`` in the spec; the fix is actionable.
+    degenerate = collect_degenerate_null_kinds(suite)
+    if degenerate:
+        c.print()
+        c.print(
+            Text(
+                f"{len(degenerate)} probe kind(s) had a degenerate null "
+                f"baseline (std ≈ 0, insufficient for z-scoring): "
+                f"{', '.join(degenerate)} — bump ``runs:`` in null_adapter spec.",
                 style="dim",
             )
         )
@@ -534,6 +581,20 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         for kind in opt_outs:
             buf.write(f"- `{kind}`\n")
 
+    # F02 (Audit 03) — degenerate null-calibration rollup.
+    degenerate = collect_degenerate_null_kinds(suite)
+    if degenerate:
+        buf.write("\n## Degenerate null calibration\n\n")
+        buf.write(
+            f"{len(degenerate)} probe kind(s) ran null_adapter but the "
+            f"resulting baseline was too narrow for z-scoring "
+            f"(std ≈ 0, typically `runs: 1` or coincidentally-matched "
+            f"seeds). Fix: bump `runs:` in the `null_adapter` spec "
+            f"entry. Affected kinds:\n\n"
+        )
+        for kind in degenerate:
+            buf.write(f"- `{kind}`\n")
+
     # F07 — cluster_kl sub-line: expand the per-cluster breakdown so
     # the reader can answer "which topic moved?" without cracking open
     # the JSON. The row itself already carries ``k=N, spec=X.XX`` in
@@ -638,6 +699,7 @@ def _bar(v: float, *, width: int = 10) -> str:
 
 
 __all__ = [
+    "collect_degenerate_null_kinds",
     "collect_missing_extras",
     "collect_null_opt_outs",
     "format_duration_s",

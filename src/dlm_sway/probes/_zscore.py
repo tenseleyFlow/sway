@@ -39,7 +39,11 @@ def z_score(raw: float, stats: Mapping[str, float] | None) -> float | None:
     Returns ``None`` when:
 
     - ``stats`` is missing (no calibration ran for this kind)
-    - ``std`` is below :data:`MIN_STD` (degenerate null distribution)
+    - ``stats["degenerate"]`` is truthy (F02 Audit 03 — null ran but
+      was too narrow to calibrate against: ``runs: 1``, or multi-seed
+      raws that collapsed to an effectively-zero variance)
+    - ``std`` is below :data:`MIN_STD` (belt-and-suspenders guard
+      for stats dicts that predate the ``degenerate`` field)
     - ``raw`` or ``mean`` is non-finite
 
     Callers that get ``None`` are expected to fall back to their probe's
@@ -53,6 +57,10 @@ def z_score(raw: float, stats: Mapping[str, float] | None) -> float | None:
     if mean is None or std is None:
         return None
     if not (math.isfinite(raw) and math.isfinite(mean) and math.isfinite(std)):
+        return None
+    # ``degenerate`` is stored as a float (1.0 / 0.0) so the stats
+    # dict stays Mapping[str, float] across every consumer.
+    if stats.get("degenerate", 0.0) >= 0.5:
         return None
     if std < MIN_STD:
         return None

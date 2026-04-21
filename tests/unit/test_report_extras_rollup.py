@@ -181,3 +181,70 @@ class TestNullOptOutsRollup:
         score = SwayScore(overall=0.9, components={}, band="healthy")
         md = report.to_markdown(suite, score)
         assert "Null-calibration opt-outs" not in md
+
+
+class TestDegenerateNullRollup:
+    """F02 (Audit 03) — probes whose null-calibration ran but produced
+    a degenerate baseline (std ≈ 0, typically ``runs: 1``) surface in
+    a separate footer rollup so the user sees the actionable fix."""
+
+    def _suite(self, null_stats: dict[str, dict[str, float]]) -> SuiteResult:
+        now = datetime.now(UTC)
+        probes = (
+            ProbeResult(name="null", kind="null_adapter", verdict=Verdict.PASS, score=1.0),
+            ProbeResult(name="dk", kind="delta_kl", verdict=Verdict.PASS, score=0.5, message="ok"),
+        )
+        return SuiteResult(
+            spec_path="<test>",
+            started_at=now,
+            finished_at=now,
+            base_model_id="b",
+            adapter_id="a",
+            sway_version="0.0.0",
+            probes=probes,
+            null_stats=null_stats,
+        )
+
+    def test_degenerate_flag_surfaces_in_rollup(self) -> None:
+        suite = self._suite(
+            {
+                "delta_kl": {"mean": 0.01, "std": 1e-6, "n": 1.0, "degenerate": 1.0},
+                "leakage": {"mean": 0.0, "std": 1e-6, "n": 1.0, "degenerate": 1.0},
+            }
+        )
+        assert report.collect_degenerate_null_kinds(suite) == ["delta_kl", "leakage"]
+
+    def test_non_degenerate_stats_excluded(self) -> None:
+        suite = self._suite(
+            {
+                "delta_kl": {"mean": 0.01, "std": 0.005, "n": 3.0, "degenerate": 0.0},
+            }
+        )
+        assert report.collect_degenerate_null_kinds(suite) == []
+
+    def test_no_null_adapter_probe_returns_empty(self) -> None:
+        now = datetime.now(UTC)
+        suite = SuiteResult(
+            spec_path="<test>",
+            started_at=now,
+            finished_at=now,
+            base_model_id="b",
+            adapter_id="a",
+            sway_version="0.0.0",
+            probes=(ProbeResult(name="dk", kind="delta_kl", verdict=Verdict.PASS, score=0.9),),
+        )
+        assert report.collect_degenerate_null_kinds(suite) == []
+
+    def test_markdown_section_appears_when_degenerate(self) -> None:
+        suite = self._suite({"leakage": {"mean": 0.0, "std": 1e-6, "n": 1.0, "degenerate": 1.0}})
+        score = SwayScore(overall=0.9, components={}, band="healthy")
+        md = report.to_markdown(suite, score)
+        assert "Degenerate null calibration" in md
+        assert "`leakage`" in md
+        assert "bump `runs:`" in md
+
+    def test_markdown_omits_section_when_none_degenerate(self) -> None:
+        suite = self._suite({"delta_kl": {"mean": 0.0, "std": 0.01, "n": 3.0, "degenerate": 0.0}})
+        score = SwayScore(overall=0.9, components={}, band="healthy")
+        md = report.to_markdown(suite, score)
+        assert "Degenerate null calibration" not in md
