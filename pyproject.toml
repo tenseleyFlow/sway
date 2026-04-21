@@ -142,6 +142,17 @@ dev = [
     # S19: the pre-commit-hook integration test spawns ``pre-commit``
     # as a subprocess. Keeps the tool out of the user's runtime deps.
     "pre-commit>=3.8",
+    # S21 / F03: pytest-timeout wraps slow+online tests so a
+    # silent network hang surfaces as a failed test rather than a
+    # job-level timeout (macOS CI observed 20m hang on Sprint 19
+    # merge run 24747915467).
+    "pytest-timeout>=2.3",
+    # S21 / F03: tenacity's retry helpers wrap
+    # ``huggingface_hub.snapshot_download`` in the tiny_model
+    # fixture. Already in the ``[api]`` extra; duplicated here so
+    # slow-lane CI jobs don't need to install ``[api]`` just to
+    # get the fixture retry.
+    "tenacity>=9.0",
 ]
 
 [build-system]
