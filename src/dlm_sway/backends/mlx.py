@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from dlm_sway.backends._instrumentation import BackendInstrumentation
 from dlm_sway.core.errors import BackendNotAvailableError, ProbeError
 from dlm_sway.core.model import ModelSpec
 from dlm_sway.core.scoring import RollingLogprob, TokenDist
@@ -48,12 +49,15 @@ class _MLXView:
     """One side (base or ft) of the MLX backend.
 
     Both sides carry the same tokenizer (MLX stores it alongside the
-    converted model files, so sharing avoids double-loading).
+    converted model files, so sharing avoids double-loading). Scoring
+    methods route through ``_inst`` for the shared cache + trace +
+    stats (Sprint 07).
     """
 
     id: str
     _model: Any
     _tokenizer: Any
+    _inst: BackendInstrumentation
 
     def generate(
         self,
@@ -88,6 +92,16 @@ class _MLXView:
         return np.asarray(out[0])
 
     def logprob_of(self, prompt: str, completion: str) -> float:
+        key_prompt = f"{prompt}\x00{completion}"
+        return self._inst.cached(
+            "logprob_of",
+            self.id,
+            key_prompt,
+            0,
+            lambda: self._compute_logprob_of(prompt, completion),
+        )
+
+    def _compute_logprob_of(self, prompt: str, completion: str) -> float:
         input_ids = self._tokenizer.encode(prompt)
         full_ids = self._tokenizer.encode(prompt + completion)
         if len(full_ids) <= len(input_ids):
@@ -104,6 +118,15 @@ class _MLXView:
         return float(gathered.sum())
 
     def rolling_logprob(self, text: str) -> RollingLogprob:
+        return self._inst.cached(
+            "rolling_logprob",
+            self.id,
+            text,
+            0,
+            lambda: self._compute_rolling_logprob(text),
+        )
+
+    def _compute_rolling_logprob(self, text: str) -> RollingLogprob:
         ids = self._tokenizer.encode(text)
         if len(ids) < 2:
             return RollingLogprob(
@@ -124,6 +147,15 @@ class _MLXView:
         )
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
+        return self._inst.cached(
+            "next_token_dist",
+            self.id,
+            prompt,
+            top_k,
+            lambda: self._compute_next_token_dist(prompt, top_k=top_k),
+        )
+
+    def _compute_next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         logits = self._forward_logits(prompt)
         last_logits = logits[-1].astype(np.float64)
         log_probs = _log_softmax(last_logits, axis=-1)
@@ -157,6 +189,12 @@ class MLXDifferentialBackend:
     this is acceptable.
     """
 
+    #: MLX holds two distinct model objects — threading against them
+    #: is still unsafe today because the ``_active`` flag is single-slot
+    #: and ``mlx_lm`` isn't documented as thread-safe. False by default;
+    #: see ``.docs/design/backend-concurrency.md``.
+    safe_for_concurrent_views: bool = False
+
     def __init__(self, *, base_spec: ModelSpec, adapter_path: Path) -> None:
         mx, mlx_lm = _require_mlx()
         self._mx = mx
@@ -168,12 +206,20 @@ class MLXDifferentialBackend:
         # Load ft with adapter attached. ``adapter_path`` is mlx_lm's kwarg.
         self._ft_model, _ = mlx_lm.load(base_spec.base, adapter_path=str(self._adapter_path))
         self._active: str | None = None
+        # Sprint 07: shared cache + trace + stats. See the HF backend
+        # for the design note on view-id-based invalidation.
+        self._inst = BackendInstrumentation()
 
     @contextmanager
     def as_base(self) -> Iterator[_MLXView]:
         self._enter("base")
         try:
-            yield _MLXView(id="base", _model=self._base_model, _tokenizer=self._tokenizer)
+            yield _MLXView(
+                id="base",
+                _model=self._base_model,
+                _tokenizer=self._tokenizer,
+                _inst=self._inst,
+            )
         finally:
             self._exit()
 
@@ -181,13 +227,20 @@ class MLXDifferentialBackend:
     def as_finetuned(self) -> Iterator[_MLXView]:
         self._enter("ft")
         try:
-            yield _MLXView(id="ft", _model=self._ft_model, _tokenizer=self._tokenizer)
+            yield _MLXView(
+                id="ft",
+                _model=self._ft_model,
+                _tokenizer=self._tokenizer,
+                _inst=self._inst,
+            )
         finally:
             self._exit()
 
     def close(self) -> None:
-        """MLX reclaims memory when references drop; nothing to do here."""
-        return
+        """MLX reclaims memory when references drop; flush the tracer."""
+        inst = getattr(self, "_inst", None)
+        if inst is not None:
+            inst.close()
 
     def _enter(self, mode: str) -> None:
         if self._active is not None:

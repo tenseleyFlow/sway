@@ -20,6 +20,7 @@ from typing import Literal
 
 import numpy as np
 
+from dlm_sway.backends._instrumentation import BackendInstrumentation
 from dlm_sway.core.scoring import RollingLogprob, TokenDist
 
 Mode = Literal["base", "ft"]
@@ -51,10 +52,24 @@ class _DummyView:
     ``ScoringModel`` intersection.
     """
 
-    def __init__(self, mode: Mode, responses: DummyResponses) -> None:
-        self.id = mode
+    def __init__(
+        self,
+        mode: Mode,
+        responses: DummyResponses,
+        inst: BackendInstrumentation | None = None,
+    ) -> None:
+        # ``id`` is what surfaces in cache keys and trace events; widened
+        # to ``str`` so scaled / null views can override it with
+        # e.g. ``"scaled_0.50"`` / ``"null_42"`` without a cast dance.
+        self.id: str = mode
         self._mode: Mode = mode
         self._r = responses
+        # Private instrumentation when the caller didn't supply one —
+        # keeps direct ``_DummyView("base", DummyResponses())``
+        # constructions (common in probe tests that grab a view
+        # without going through the differential backend) working
+        # transparently.
+        self._inst: BackendInstrumentation = inst if inst is not None else BackendInstrumentation()
 
     # -- Model ---------------------------------------------------------
     def generate(
@@ -79,9 +94,24 @@ class _DummyView:
 
     # -- ScoringBackend ------------------------------------------------
     def logprob_of(self, prompt: str, completion: str) -> float:
-        return self._r.logprobs.get((prompt, completion), -10.0)
+        return self._inst.cached(
+            "logprob_of",
+            self.id,
+            f"{prompt}\x00{completion}",
+            0,
+            lambda: self._r.logprobs.get((prompt, completion), -10.0),
+        )
 
     def rolling_logprob(self, text: str) -> RollingLogprob:
+        return self._inst.cached(
+            "rolling_logprob",
+            self.id,
+            text,
+            0,
+            lambda: self._compute_rolling_logprob(text),
+        )
+
+    def _compute_rolling_logprob(self, text: str) -> RollingLogprob:
         if text in self._r.rolling:
             return self._r.rolling[text]
         # Synthesize a plausible rolling logprob so probes that just
@@ -97,6 +127,15 @@ class _DummyView:
         )
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
+        return self._inst.cached(
+            "next_token_dist",
+            self.id,
+            prompt,
+            top_k,
+            lambda: self._compute_next_token_dist(prompt, top_k=top_k),
+        )
+
+    def _compute_next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         del top_k
         if prompt in self._r.token_dists:
             return self._r.token_dists[prompt]
@@ -204,17 +243,27 @@ class DummyDifferentialBackend:
     exit one view before entering the other, catching bugs in probes
     that hold a stale view across a toggle.
 
+    Dummy declares ``safe_for_concurrent_views = False`` to mirror the
+    shipped backends' posture; tests that want to exercise the concurrent
+    scheduling path can subclass and set it ``True``.
+
     Also implements
     :class:`~dlm_sway.core.scoring.ScalableDifferentialBackend` with a
     linear-blend between base and ft responses, so probes that need
     ``as_scaled_adapter`` (N2 AdapterAblation) are unit-testable.
     """
 
+    safe_for_concurrent_views: bool = False
+
     def __init__(self, *, base: DummyResponses, ft: DummyResponses) -> None:
         self._base_r = base
         self._ft_r = ft
-        self._base = _DummyView("base", base)
-        self._ft = _DummyView("ft", ft)
+        # Sprint 07: one shared cache + trace + stats instance that
+        # every view yielded by this backend reads/writes. Tests can
+        # peek at ``backend._inst.stats`` to assert cache behavior.
+        self._inst = BackendInstrumentation()
+        self._base = _DummyView("base", base, inst=self._inst)
+        self._ft = _DummyView("ft", ft, inst=self._inst)
         self._active: str | None = None
 
     @contextmanager
@@ -237,7 +286,10 @@ class DummyDifferentialBackend:
     def as_scaled_adapter(self, lam: float) -> Iterator[_DummyView]:
         self._enter(f"scaled({lam})")
         try:
-            yield _InterpolatedView(self._base_r, self._ft_r, lam)
+            view = _InterpolatedView(self._base_r, self._ft_r, lam)
+            view._inst = self._inst
+            view.id = f"scaled_{lam:.2f}"
+            yield view
         finally:
             self._exit()
 
@@ -245,7 +297,10 @@ class DummyDifferentialBackend:
     def as_null_adapter(self, seed: int, *, init_scale: float = 0.02) -> Iterator[_DummyView]:
         self._enter(f"null({seed})")
         try:
-            yield _NullView(self._base_r, seed=seed, init_scale=init_scale)
+            view = _NullView(self._base_r, seed=seed, init_scale=init_scale)
+            view._inst = self._inst
+            view.id = f"null_{seed}"
+            yield view
         finally:
             self._exit()
 

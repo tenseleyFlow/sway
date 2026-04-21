@@ -110,6 +110,11 @@ class SuiteResult:
     :func:`dlm_sway.core.determinism.seed_everything`. ``None`` when the
     caller bypassed seeding (e.g., unit tests constructing a
     ``SuiteResult`` directly)."""
+    backend_stats: dict[str, float | int] = field(default_factory=dict)
+    """Forward-pass + cache counters from the backend
+    (:class:`dlm_sway.backends._instrumentation.BackendStats.to_dict`).
+    Populated by the runner at suite-end; ``{}`` when the backend
+    doesn't expose instrumentation (custom backends, pre-S07 snapshots)."""
 
     @property
     def wall_seconds(self) -> float:

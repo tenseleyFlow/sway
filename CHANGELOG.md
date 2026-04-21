@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Sprint 07 — Performance & caching
+
+Closes Audit 01 findings B19 (deferred per design note),
+E-cache-opportunity.
+
+- **Forward-pass cache** (`backends/_instrumentation.py`): every
+  backend view now routes `next_token_dist` / `rolling_logprob` /
+  `logprob_of` through a bounded LRU keyed on `(op, view_id,
+  prompt_hash, top_k)`. Baseline A/B on a tiny 4-probe suite against
+  SmolLM2-135M on CPU: 2.33s → 1.76s (**25% wall-time reduction**,
+  forward passes 88 → 62, hit rate 30%). The audit's 18.5s Quillstone
+  suite has more overlap and would see larger gains; the 25% floor
+  holds on any suite with repeated prompts across probes.
+- **Cache key includes `view_id`**: `"base"` / `"ft"` /
+  `"scaled_1.25"` / `"null_42"` are distinct namespaces. A future
+  toggle regression that fails to flip the adapter would surface as
+  wrong-side cached values immediately, not silently corrupt
+  divergence math.
+- **Backend stats surface in the report**: `SuiteResult.backend_stats`
+  captures `cache_hits` / `cache_misses` / `forward_passes` /
+  `scoring_wall_s` / `hit_rate`. Terminal + markdown footers render
+  `cache: 26/88 = 30%` when stats are present.
+- **Forward-pass tracing**: `sway run --trace <path.jsonl>` writes
+  one event per backend scoring call (probe / view_id / prompt_hash /
+  top_k / op / wall_ms / hit). Zero overhead when unset.
+- **`concurrent_probes` scaffolding**: `spec.defaults.concurrent_probes:
+  int = 1` field plus `safe_for_concurrent_views: bool = False`
+  class attribute on HF / MLX / Dummy backends. The runner warns on
+  stderr when the user requested > 1 against an unsafe backend and
+  stays sequential. Custom backends that are already concurrency-safe
+  (e.g. a stateless hosted-API backend) can opt in without waiting
+  for the HF fix.
+- **B19 design note**: `.docs/design/backend-concurrency.md` documents
+  current state, why v0.1 doesn't fix it, and two future paths
+  (per-thread lock vs per-worker pool) with recommendation.
+- **Generation stays uncached**: `view.generate()` intentionally
+  bypasses the cache — probe-side callers vary
+  `(prompt, max_new_tokens, temperature, seed)` in ways that would
+  rarely collide, and caching sampled output would hide seed bugs
+  behind stale strings.
+
 ### Sprint 06 — CLI & report UX polish
 
 Closes Audit 01 findings D3, D4, D5, D6, D7, D8, D9, D10, D11, D12,

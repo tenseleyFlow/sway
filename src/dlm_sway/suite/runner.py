@@ -19,6 +19,7 @@ Runtime contract:
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import MappingProxyType
 
 from dlm_sway import __version__
@@ -40,6 +41,7 @@ def run(
     doc_text: str | None = None,
     sections: tuple[Section, ...] | None = None,
     skip_preflight: bool = False,
+    trace_path: Path | None = None,
 ) -> SuiteResult:
     """Execute every probe in ``spec`` against ``backend``.
 
@@ -55,6 +57,23 @@ def run(
     """
     started = utcnow()
 
+    # Sprint 07: concurrent_probes is scaffolding. The HF and MLX
+    # backends declare ``safe_for_concurrent_views = False`` so the
+    # runner stays sequential below. When a future sprint builds the
+    # pool (see ``.docs/design/backend-concurrency.md``), flip the
+    # check to dispatch here; the spec field is already validated.
+    requested = spec.defaults.concurrent_probes
+    backend_safe = getattr(backend, "safe_for_concurrent_views", False)
+    if requested > 1 and not backend_safe:
+        import sys as _sys
+
+        print(
+            f"warning: spec requested concurrent_probes={requested} but "
+            f"{type(backend).__name__} is not concurrency-safe — running "
+            f"sequentially (see .docs/design/backend-concurrency.md)",
+            file=_sys.stderr,
+        )
+
     # Seed every RNG sway's probes touch before any backend work runs.
     # ``strict=True`` asks torch for deterministic algorithms and sets
     # CUBLAS_WORKSPACE_CONFIG; this is a no-op when torch is absent, so
@@ -66,6 +85,12 @@ def run(
         seed=det_summary.seed,
         notes=det_summary.notes,
     )
+
+    # Sprint 07: attach a trace writer to the backend's
+    # instrumentation if the caller asked for one. Silent no-op for
+    # backends without ``_inst`` (custom backends) and for the default
+    # ``trace_path=None`` case.
+    _install_trace_writer(backend, trace_path)
 
     ctx = RunContext(
         backend=backend,
@@ -109,6 +134,7 @@ def run(
                 probes=tuple(results),
                 null_stats={},
                 determinism=determinism,
+                backend_stats=_snapshot_backend_stats(backend),
             )
 
     # Pre-extract suite kinds so each probe sees only what's *after* it.
@@ -141,6 +167,10 @@ def run(
             null_stats=ctx.null_stats,
             downstream_kinds=downstream_kinds,
         )
+
+        # Label trace events with the currently-running probe so the
+        # JSONL is filterable by probe name.
+        _set_backend_probe_label(backend, probe_spec.name)
 
         t0 = time.perf_counter()
         try:
@@ -182,6 +212,7 @@ def run(
                 null_stats=MappingProxyType(null_stats),
             )
 
+    _set_backend_probe_label(backend, None)
     finished = utcnow()
     return SuiteResult(
         spec_path=spec_path,
@@ -193,7 +224,40 @@ def run(
         probes=tuple(results),
         null_stats=null_stats,
         determinism=determinism,
+        backend_stats=_snapshot_backend_stats(backend),
     )
+
+
+def _install_trace_writer(backend: DifferentialBackend, trace_path: Path | None) -> None:
+    """Attach a :class:`TraceWriter` to the backend's instrumentation.
+
+    Silent no-op when the backend doesn't expose ``_inst`` (custom
+    backends). When ``trace_path`` is ``None``, the existing no-op
+    tracer stays in place.
+    """
+    if trace_path is None:
+        return
+    inst = getattr(backend, "_inst", None)
+    if inst is None:
+        return
+    from dlm_sway.backends._instrumentation import TraceWriter
+
+    inst.trace = TraceWriter(trace_path)
+
+
+def _set_backend_probe_label(backend: DifferentialBackend, name: str | None) -> None:
+    inst = getattr(backend, "_inst", None)
+    if inst is None:
+        return
+    inst.set_current_probe(name)
+
+
+def _snapshot_backend_stats(backend: DifferentialBackend) -> dict[str, float | int]:
+    """Copy the backend's counters into a plain dict for ``SuiteResult``."""
+    inst = getattr(backend, "_inst", None)
+    if inst is None:
+        return {}
+    return dict(inst.stats.to_dict())
 
 
 def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:

@@ -199,6 +199,9 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     footer_parts = [f"wall: {format_duration_s(suite.wall_seconds)}", f"sway {suite.sway_version}"]
     if suite.determinism is not None:
         footer_parts.append(f"det: {suite.determinism.class_} (seed={suite.determinism.seed})")
+    cache_line = _cache_line(suite)
+    if cache_line is not None:
+        footer_parts.append(cache_line)
     c.print(Text("  |  ".join(footer_parts), style="dim"))
 
 
@@ -229,6 +232,7 @@ def _to_jsonable(suite: SuiteResult, score: SwayScore) -> dict[str, Any]:
         "finished_at": suite.finished_at.isoformat(),
         "wall_seconds": suite.wall_seconds,
         "determinism": determinism,
+        "backend_stats": dict(suite.backend_stats) if suite.backend_stats else {},
         "score": {
             "overall": score.overall,
             "band": score.band,
@@ -321,6 +325,7 @@ def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
         probes=probes,
         null_stats=dict(raw.get("null_stats") or {}),
         determinism=determinism,
+        backend_stats=dict(raw.get("backend_stats") or {}),
     )
 
     score_raw: dict[str, Any] = raw.get("score") or {}
@@ -387,6 +392,9 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         buf.write(
             f"**Determinism:** `{suite.determinism.class_}` (seed={suite.determinism.seed})  \n"
         )
+    cache_line = _cache_line(suite)
+    if cache_line is not None:
+        buf.write(f"**Backend:** {cache_line}  \n")
     buf.write("\n")
 
     buf.write("## Components\n\n")
@@ -431,6 +439,20 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
 
 
 # -- helpers -----------------------------------------------------------
+
+
+def _cache_line(suite: SuiteResult) -> str | None:
+    """Format the cache-hit-rate footer line, or ``None`` when no stats."""
+    stats = suite.backend_stats
+    if not stats:
+        return None
+    hits = int(stats.get("cache_hits", 0))
+    misses = int(stats.get("cache_misses", 0))
+    total = hits + misses
+    if total == 0:
+        return None
+    pct = 100.0 * hits / total
+    return f"cache: {hits}/{total} = {pct:.0f}%"
 
 
 def _adapter_label(adapter_id: str) -> str:
