@@ -139,6 +139,9 @@ dev = [
     # optional-dep because contributors may want to run integration tests
     # without the full [hf] extra installed.
     "huggingface_hub>=0.25",
+    # S19: the pre-commit-hook integration test spawns ``pre-commit``
+    # as a subprocess. Keeps the tool out of the user's runtime deps.
+    "pre-commit>=3.8",
 ]
 
 [build-system]
