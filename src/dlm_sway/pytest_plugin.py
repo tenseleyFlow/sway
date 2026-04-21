@@ -40,7 +40,6 @@ from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
 if TYPE_CHECKING:
     from _pytest.config import Config
     from _pytest.nodes import Item
-    from _pytest.python import Function
 
 
 # ----------------------------------------------------------------------
