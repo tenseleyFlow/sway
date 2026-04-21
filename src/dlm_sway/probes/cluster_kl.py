@@ -95,7 +95,7 @@ class ClusterKLSpec(ProbeSpec):
 
 
 class ClusterKLProbe(Probe):
-    """Clustered-KL probe — see module docstring."""
+    """F8 ClusterKL — distribution-shift specificity via clustered KL."""
 
     kind = "cluster_kl"
     spec_cls = ClusterKLSpec
