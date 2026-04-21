@@ -34,13 +34,61 @@ class TestShapeMetrics:
     def test_saturation_lambda_expected(self) -> None:
         lambdas = np.asarray([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float64)
         divs = np.asarray([0.0, 0.5, 0.8, 0.95, 1.0], dtype=np.float64)
-        sat = _saturation_lambda(lambdas, divs)
+        sat, reason = _saturation_lambda(lambdas, divs)
         assert sat == 0.75  # 0.95 / 1.0 = 0.95 ≥ 0.9
+        assert reason == "found"
 
     def test_overshoot_recovered(self) -> None:
         lambdas = np.asarray([0.0, 0.5, 1.0, 1.25], dtype=np.float64)
         divs = np.asarray([0.0, 0.5, 1.0, 1.15], dtype=np.float64)
         assert _overshoot(lambdas, divs) == 1.15
+
+    def test_saturation_flat_curve(self) -> None:
+        """Adapter that produces no signal — every divergence is zero."""
+        lambdas = np.asarray([0.0, 0.5, 1.0, 1.25], dtype=np.float64)
+        divs = np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        assert sat is None
+        assert reason == "flat_curve"
+
+    def test_saturation_overshoot_peak_above_one(self) -> None:
+        """B3 fix: curve peaks at λ=1.25 (0.95 reaches 90% of max=1.0).
+        Saturation now picks the smallest λ where divs ≥ 0.9 × 1.0 = 0.9 —
+        namely λ=0.5 with div=0.95. Pre-fix this returned ``None`` because
+        the search was bounded at λ ≤ 1.0 with `div(λ=1)` as reference."""
+        lambdas = np.asarray([0.0, 0.5, 1.0, 1.25], dtype=np.float64)
+        divs = np.asarray([0.0, 0.95, 0.7, 1.0], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        assert sat == 0.5
+        # Curve was monotonic up to and including the saturation point;
+        # the dip happened *after* it, which the per-saturation-point
+        # monotonicity check accepts.
+        assert reason == "found"
+
+    def test_saturation_non_monotonic_before_saturation(self) -> None:
+        """A curve that zigzags up to the saturation point gets a WARN."""
+        lambdas = np.asarray([0.0, 0.25, 0.5, 0.75, 1.0], dtype=np.float64)
+        # 0 → 0.6 → 0.4 (dip) → 0.95 (90% of max=1.0)
+        divs = np.asarray([0.0, 0.6, 0.4, 0.95, 1.0], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        assert sat == 0.75
+        assert reason == "non_monotonic"
+
+    def test_saturation_below_floor_with_negative_max(self) -> None:
+        """Pathological negative-only curve (shouldn't happen with JS but
+        guards against numerical drift / future probe variants)."""
+        lambdas = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        divs = np.asarray([-0.5, -0.3, -0.1], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        assert sat is None
+        assert reason == "flat_curve"  # max ≤ 0 → flat by definition
+
+    def test_saturation_nan_max_treated_as_flat(self) -> None:
+        lambdas = np.asarray([0.0, 0.5, 1.0], dtype=np.float64)
+        divs = np.asarray([0.1, np.nan, 0.5], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        assert sat is None
+        assert reason == "flat_curve"
 
 
 def _diverging_backend() -> DummyDifferentialBackend:
