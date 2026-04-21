@@ -58,15 +58,32 @@ def _stub_embedder(text_to_vec: dict[str, np.ndarray]):  # type: ignore[no-untyp
     return _encode
 
 
+def _argmax_kmeans(embeddings: np.ndarray, *, k: int, seed: int) -> np.ndarray:
+    """sklearn-free stub: cluster by argmax of the one-hot test embeddings.
+
+    The tests construct embeddings in the canonical basis so each vector's
+    argmax is its intended cluster ID. Keeps the unit tests runnable on CI
+    runners that don't install the ``[semsim]`` extra.
+    """
+    del seed  # deterministic by construction
+    labels = np.argmax(embeddings, axis=1).astype(np.int64)
+    return labels % k
+
+
 @pytest.fixture
 def monkeyed_embed(monkeypatch: pytest.MonkeyPatch) -> dict[str, np.ndarray]:
-    """Install a stub embedder on ``cluster_kl._embed_prompts``'s underlying
-    loader — same shared-cache hook ``adapter_revert`` uses.
+    """Install a stub embedder + sklearn-free k-means on ``cluster_kl``'s
+    helpers. Matches the ``adapter_revert`` test pattern but also bypasses
+    ``sklearn.cluster.KMeans`` so tests work without the ``[semsim]`` extra.
     """
     table: dict[str, np.ndarray] = {}
     monkeypatch.setattr(
         "dlm_sway.probes.cluster_kl._load_embedder",
         lambda _model_id: _stub_embedder(table),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        "dlm_sway.probes.cluster_kl._kmeans_cluster",
+        _argmax_kmeans,
     )
     return table
 
