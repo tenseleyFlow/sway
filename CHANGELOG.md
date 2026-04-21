@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Sprint 10 — Multi-rank adversarial null adapters
+
+Closes Audit 01 innovation item F4. Extends the S02 null-calibration
+matrix with a per-rank profile — users now read "how rank-saturated
+is my adapter?" straight off the report.
+
+- **`NullAdapterSpec.rank_multipliers: list[float] = [1.0]`** (new).
+  Default preserves single-rank behavior byte-for-byte. Setting
+  `[0.5, 1.0, 2.0]` calibrates three independent null distributions
+  per probe kind and emits a z-profile alongside the verdict z-score.
+- **`NullCalibratedBackend.as_null_adapter` gains a `rank_scale` kwarg.**
+  Both shipped backends (dummy + HF) implement it by scaling the
+  null-weight noise std by `sqrt(rank_scale)` — mathematically
+  equivalent to a rank change in terms of the LoRA output variance
+  (`A·B` is a sum of `r` rank-1 outer products; variance is linear
+  in `r`). No tensor-shape surgery, no model reload per multiplier.
+- **`RunContext.null_stats_by_rank`** threads the per-rank matrix
+  through the runner. Keys are canonical `rank_{mult:.2f}` strings;
+  inner structure matches `null_stats`.
+- **Numeric probes emit `evidence["z_by_rank"]`.** Every numeric
+  probe (delta_kl, calibration_drift, external_perplexity, leakage,
+  adapter_revert, adapter_ablation, paraphrase_invariance,
+  preference_flip, prompt_collapse, section_internalization,
+  style_fingerprint) computes per-rank z-scores using its existing
+  sign convention. The verdict path still reads the 1.0x group —
+  no existing thresholds shift.
+- **Report surfaces the profile.** Terminal + markdown probe notes
+  append `rank profile: +4.2σ @ 1x / +6.8σ @ 0.5x / +2.1σ @ 2x`
+  whenever multi-rank calibration ran. `format_z_profile` helper
+  centralizes the rendering.
+- **Null-stats disk cache widens key to include `rank_multipliers`.**
+  Single-rank caches from pre-S10 runs are still readable — they're
+  promoted to the new `null_stats_by_rank` shape on load.
+- **Bug fix (`external_perplexity`): drop erroneous z sign flip.**
+  `mean_delta` is higher-is-better (ft logprob minus base logprob
+  on external prose), so the raw z-score maps directly onto
+  `z >= assert_z_gte`. S09's sign flip was reversing the pass/fail
+  direction when the null-calibration path ran.
+- **README: rank-profile interpretation guide.** Explains when the
+  shape indicates rank saturation vs. rank oversizing, plus the
+  "low rank can be pathologically quiet" dual-reading caveat.
+- **Prove-the-value (`tests/unit/test_null_multi_rank.py`):** on a
+  fixed adapter with the dummy backend, the delta_kl z-profile is
+  strictly monotone in inverse rank (`z@0.5x > z@1.0x > z@2.0x`) —
+  exactly the signature of a rank-scaled null distribution.
+
 ### Sprint 09 — External-perplexity-gap probe
 
 Closes Audit 01 innovation item F3. First innovation sprint landed on
