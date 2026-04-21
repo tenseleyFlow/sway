@@ -12,6 +12,7 @@ For integration tests against a real PEFT adapter, see
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -188,7 +189,15 @@ class _NullView(_DummyView):
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         base_dist = super().next_token_dist(prompt, top_k=top_k)
-        rng = np.random.default_rng(self._seed + hash(prompt) % 1_000_003)
+        # F08 — Python's built-in ``hash(str)`` is salted per-process via
+        # ``PYTHONHASHSEED``, so the same ``(self._seed, prompt)`` pair
+        # produced different RNG streams across interpreter invocations.
+        # That violated the README's determinism contract and meant the
+        # null-stats disk cache (~/.dlm-sway/null-stats/) could serve
+        # stale values on a restart. ``hashlib.md5`` is stable; taking
+        # the first 8 hex digits keeps the arithmetic in 32-bit range.
+        prompt_hash = int(hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8], 16)
+        rng = np.random.default_rng(self._seed + prompt_hash % 1_000_003)
         effective_scale = self._init_scale * math.sqrt(self._rank_scale)
         noise = rng.normal(0.0, effective_scale, size=base_dist.logprobs.shape).astype(np.float32)
         new_lp = base_dist.logprobs + noise
