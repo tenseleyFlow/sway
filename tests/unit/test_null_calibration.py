@@ -57,13 +57,14 @@ class TestAsNullAdapter:
 
 class TestProbe:
     def test_populates_null_stats(self) -> None:
+        """Explicit `calibrate_kinds` calibrates regardless of suite order."""
         backend = _diverging_backend()
         probe, spec = build_probe(
             {
                 "name": "null",
                 "kind": "null_adapter",
                 "runs": 3,
-                "prompts": ["q1", "q2"],
+                "calibrate_kinds": ["delta_kl"],
             }
         )
         ctx = RunContext(backend=backend)
@@ -73,6 +74,65 @@ class TestProbe:
         assert "delta_kl" in stats
         assert stats["delta_kl"]["n"] == 3.0
         assert stats["delta_kl"]["std"] > 0.0  # seeded perturbations produce variance
+
+    def test_auto_populates_from_downstream_kinds(self) -> None:
+        """When `calibrate_kinds` is empty, falls back to `ctx.downstream_kinds`."""
+        backend = _diverging_backend()
+        probe, spec = build_probe({"name": "null", "kind": "null_adapter", "runs": 2})
+        ctx = RunContext(
+            backend=backend,
+            downstream_kinds=("delta_kl", "prompt_collapse"),
+        )
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.PASS
+        stats = result.evidence["null_stats"]
+        # Every downstream numeric kind that opts in gets stats.
+        assert "delta_kl" in stats
+        assert "prompt_collapse" in stats
+
+    def test_empty_calibrate_kinds_with_no_downstream_is_noop(self) -> None:
+        """No kinds, no calibration — probe still PASSes with empty stats."""
+        backend = _diverging_backend()
+        probe, spec = build_probe({"name": "null", "kind": "null_adapter", "runs": 2})
+        ctx = RunContext(backend=backend)  # no downstream_kinds
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.PASS
+        assert result.evidence["null_stats"] == {}
+        assert result.evidence["calibrated_kinds"] == []
+
+    def test_unregistered_kind_is_silently_skipped(self) -> None:
+        backend = _diverging_backend()
+        probe, spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                "calibrate_kinds": ["delta_kl", "nonexistent_kind"],
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert "delta_kl" in result.evidence["null_stats"]
+        assert "nonexistent_kind" not in result.evidence["null_stats"]
+
+    def test_opt_out_probe_is_reported_as_skipped(self) -> None:
+        """A kind whose calibrate_spec returns None surfaces in skipped_kinds."""
+        backend = _diverging_backend()
+        probe, spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                # adapter_revert.calibrate_spec returns None by default
+                # (inherits from base), so we expect it to opt out.
+                "calibrate_kinds": ["adapter_revert", "delta_kl"],
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert "delta_kl" in result.evidence["null_stats"]
+        skipped = [s["kind"] for s in result.evidence["skipped_kinds"]]
+        assert "adapter_revert" in skipped
 
     def test_runner_threads_null_stats_to_subsequent_probes(self) -> None:
         """End-to-end: null_adapter first → delta_kl picks up z-score path."""
@@ -86,7 +146,6 @@ class TestProbe:
                         "name": "null",
                         "kind": "null_adapter",
                         "runs": 3,
-                        "prompts": ["p1", "p2"],
                     },
                     {
                         "name": "dk",

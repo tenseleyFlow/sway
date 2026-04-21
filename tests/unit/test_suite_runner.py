@@ -127,7 +127,15 @@ class TestRunner:
         self, backend: DummyDifferentialBackend
     ) -> None:
         # Dummy backend implements NullCalibratedBackend, so calibration runs.
-        spec = _spec({"name": "null", "kind": "null_adapter", "runs": 2, "prompts": ["q1"]})
+        # Explicit calibrate_kinds so it runs even without downstream probes.
+        spec = _spec(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                "calibrate_kinds": ["delta_kl"],
+            }
+        )
         result = run(spec, backend)
         assert result.probes[0].kind == "null_adapter"
         assert result.probes[0].verdict == Verdict.PASS
