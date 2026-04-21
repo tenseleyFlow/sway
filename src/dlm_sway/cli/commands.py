@@ -345,6 +345,7 @@ def _execute_spec(
     CLI hands through ``--weights k=v,k=v`` via this parameter.
     """
     from dlm_sway.backends import build as build_backend
+    from dlm_sway.backends import build_two_separate
     from dlm_sway.suite.loader import load_spec
     from dlm_sway.suite.runner import run as run_suite
     from dlm_sway.suite.score import compute as compute_score
@@ -364,7 +365,10 @@ def _execute_spec(
             # Honoring dlm_source is best-effort — probes that need
             # sections will SKIP with a pointer at the extra.
             sections = None
-    backend = build_backend(spec.models.ft)
+    if spec.defaults.differential:
+        backend: Any = build_backend(spec.models.ft)
+    else:
+        backend = build_two_separate(spec.models)
     try:
         result = run_suite(spec, backend, spec_path=str(path), sections=sections, doc_text=doc_text)
     finally:
