@@ -23,7 +23,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 
 class PreferenceTriple(BaseModel):
@@ -41,6 +48,9 @@ class PreferenceFlipSpec(ProbeSpec):
     sections in ctx.sections; if neither is available the probe SKIPs."""
     assert_flip_rate_gte: float = 0.7
     """Fraction of *base-wrong* triples that must flip under ft."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Preferred over the raw threshold."""
     min_triples_for_decision: int = 3
 
 
@@ -122,14 +132,33 @@ class PreferenceFlipProbe(Probe):
             )
 
         flip_rate = len(flipped_idx) / len(base_wrong_idx)
-        verdict = Verdict.PASS if flip_rate >= spec.assert_flip_rate_gte else Verdict.FAIL
-        score = min(1.0, flip_rate / max(spec.assert_flip_rate_gte, 1e-6))
+
+        stats = get_null_stats(ctx, spec.kind)
+        z = z_score(flip_rate, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = (
+                f"flip_rate={flip_rate:.2%} ({len(flipped_idx)}/{len(base_wrong_idx)}), "
+                f"z={z:+.2f}σ vs null"
+            )
+        else:
+            verdict = Verdict.PASS if flip_rate >= spec.assert_flip_rate_gte else Verdict.FAIL
+            score = min(1.0, flip_rate / max(spec.assert_flip_rate_gte, 1e-6))
+            message = (
+                f"flip_rate={flip_rate:.2%} ({len(flipped_idx)}/{len(base_wrong_idx)} "
+                f"base-wrong triples flipped by ft) {no_calibration_note(spec.kind)}"
+            )
+
         return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
             score=score,
             raw=flip_rate,
+            z_score=z,
             base_value=statistics.fmean(base_margins),
             ft_value=statistics.fmean(ft_margins),
             evidence={
@@ -139,10 +168,7 @@ class PreferenceFlipProbe(Probe):
                 "total": len(triples),
                 "weight": spec.weight,
             },
-            message=(
-                f"flip_rate={flip_rate:.2%} ({len(flipped_idx)}/{len(base_wrong_idx)} "
-                f"base-wrong triples flipped by ft)"
-            ),
+            message=message,
         )
 
 
