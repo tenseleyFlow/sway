@@ -55,8 +55,7 @@ class TestNoCalibrationAnnotation:
         # the fixed-threshold path and must surface the annotation.
         if result.verdict in (Verdict.PASS, Verdict.FAIL) and result.raw is not None:
             assert "no calibration" in result.message.lower(), (
-                f"{kind} did not surface the no-calibration annotation; "
-                f"message={result.message!r}"
+                f"{kind} did not surface the no-calibration annotation; message={result.message!r}"
             )
             assert result.z_score is None
 
