@@ -76,6 +76,7 @@ def to_html(suite: SuiteResult, score: SwayScore) -> str:
     try:
         import plotly.graph_objects as go
         import plotly.io as pio
+        from plotly.offline import get_plotlyjs
     except ImportError as exc:
         raise RuntimeError(
             "plotly is required for --format html. Install with: pip install 'dlm-sway[viz]'"
@@ -107,7 +108,7 @@ def to_html(suite: SuiteResult, score: SwayScore) -> str:
         ("Per-probe score vs. z-score", _DIV_SCATTER, _fig_to_div(pio, scatter_fig, _DIV_SCATTER))
     )
 
-    return _assemble(suite, score, panels, plotly_js=pio.get_plotlyjs())
+    return _assemble(suite, score, panels, plotly_js=get_plotlyjs())
 
 
 # ----------------------------------------------------------------------
