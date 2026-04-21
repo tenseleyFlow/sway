@@ -76,6 +76,13 @@ api = [
     "httpx>=0.27",
     "tenacity>=9.0",
 ]
+# pytest integration (S15 / F10). The plugin is discovered via the
+# `pytest11` entry point below — ``pip install 'dlm-sway[pytest]'``
+# adds pytest if the user doesn't have it, then pytest auto-loads
+# the plugin on next invocation.
+pytest = [
+    "pytest>=8.0",
+]
 # Visualization (P9 + S12 HTML report).
 viz = [
     "matplotlib>=3.8",
@@ -94,12 +101,20 @@ all = [
     "sentence-transformers>=3.0",
     "httpx>=0.27",
     "tenacity>=9.0",
+    "pytest>=8.0",
     "matplotlib>=3.8",
     "plotly>=5.20",
 ]
 
 [project.scripts]
 sway = "dlm_sway.cli.app:main"
+
+# S15 / F10: pytest plugin discovered via the canonical pytest11
+# entry-point. Gets auto-loaded the moment the wheel is installed,
+# even without an ``@pytest.mark.sway`` import — consistent with how
+# pytest-cov, pytest-xdist, etc. ship their plugins.
+[project.entry-points.pytest11]
+sway = "dlm_sway.pytest_plugin"
 
 [project.urls]
 Homepage = "https://github.com/tenseleyFlow/sway"
