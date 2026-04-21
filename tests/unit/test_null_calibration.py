@@ -81,14 +81,20 @@ class TestProbe:
         probe, spec = build_probe({"name": "null", "kind": "null_adapter", "runs": 2})
         ctx = RunContext(
             backend=backend,
-            downstream_kinds=("delta_kl", "prompt_collapse"),
+            # paraphrase_invariance opts in (stable mean_verb under null);
+            # prompt_collapse opts out (half_life is undefined under null).
+            downstream_kinds=("delta_kl", "prompt_collapse", "paraphrase_invariance"),
         )
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.PASS
         stats = result.evidence["null_stats"]
-        # Every downstream numeric kind that opts in gets stats.
+        # Downstream numeric kinds that opt in get stats.
         assert "delta_kl" in stats
-        assert "prompt_collapse" in stats
+        assert "paraphrase_invariance" in stats
+        # prompt_collapse opts out — show up in skipped_kinds instead.
+        assert "prompt_collapse" not in stats
+        skipped = {s["kind"] for s in result.evidence["skipped_kinds"]}
+        assert "prompt_collapse" in skipped
 
     def test_empty_calibrate_kinds_with_no_downstream_is_noop(self) -> None:
         """No kinds, no calibration — probe still PASSes with empty stats."""
