@@ -4,6 +4,15 @@ Extracted so :mod:`delta_kl`, :mod:`adapter_ablation`, and any future
 probe operating on next-token distributions reuse the same aligned-
 top-k KL / JS computation. Having one implementation keeps the numerical
 treatment consistent across the report.
+
+**Non-finite policy** (S01): every entry point in this module rejects
+non-finite inputs *explicitly* by raising :class:`ProbeError`. The
+historical bug — ``np.exp(nan) = nan`` flowing past a ``p > 0`` mask
+that evaluates ``nan > 0`` as False — produced a mathematically
+impossible JS divergence of 13.247 nats (bounded by ln 2 ≈ 0.693).
+We refuse to compute on non-finite inputs rather than silently produce
+garbage; the calling probe routes the resulting :class:`ProbeError` to
+:attr:`Verdict.ERROR` via :func:`safe_finalize`.
 """
 
 from __future__ import annotations
@@ -14,9 +23,26 @@ from typing import Literal
 import numpy as np
 from numpy.typing import NDArray
 
+from dlm_sway.core.errors import ProbeError
 from dlm_sway.core.scoring import TokenDist
 
 Divergence = Literal["kl", "js"]
+
+
+def _check_finite_token_dist(name: str, dist: TokenDist) -> None:
+    """Reject a TokenDist whose logprobs contain NaN/inf.
+
+    Called at the entry to ``aligned_probs``. The error message names the
+    side (base / ft) so a probe failure pinpoints the broken model.
+    """
+    if not np.all(np.isfinite(dist.logprobs)):
+        n_bad = int(np.sum(~np.isfinite(dist.logprobs)))
+        raise ProbeError(
+            "divergence",
+            f"{name} TokenDist contains {n_bad} non-finite logprob(s) — "
+            f"refusing to compute divergence on a model that produces "
+            f"NaN/inf logits",
+        )
 
 
 def aligned_probs(
@@ -30,7 +56,13 @@ def aligned_probs(
     known probabilities in. Unknown entries fall back to the
     per-distribution tail mass divided across the missing tokens,
     which is the maximum-entropy completion under the truncation.
+
+    Raises :class:`ProbeError` when either input contains non-finite
+    logprobs.
     """
+    _check_finite_token_dist("base", base)
+    _check_finite_token_dist("ft", ft)
+
     union_ids = np.union1d(base.token_ids, ft.token_ids)
     k = int(union_ids.size)
 
@@ -38,8 +70,18 @@ def aligned_probs(
     ft_probs = _to_support(ft, union_ids, k)
 
     # Normalize in case of floating noise from the fill-in.
-    base_probs /= base_probs.sum()
-    ft_probs /= ft_probs.sum()
+    base_total = float(base_probs.sum())
+    ft_total = float(ft_probs.sum())
+    if not (math.isfinite(base_total) and base_total > 0):
+        raise ProbeError(
+            "divergence", f"base distribution sums to {base_total} after support alignment"
+        )
+    if not (math.isfinite(ft_total) and ft_total > 0):
+        raise ProbeError(
+            "divergence", f"ft distribution sums to {ft_total} after support alignment"
+        )
+    base_probs /= base_total
+    ft_probs /= ft_total
     return base_probs, ft_probs
 
 
@@ -69,11 +111,29 @@ def _to_support(dist: TokenDist, support: NDArray[np.int64], k: int) -> NDArray[
     return out
 
 
+def _check_finite_array(name: str, arr: NDArray[np.float64]) -> None:
+    """Reject an array containing NaN/inf."""
+    if not np.all(np.isfinite(arr)):
+        n_bad = int(np.sum(~np.isfinite(arr)))
+        raise ProbeError(
+            "divergence",
+            f"{name} contains {n_bad} non-finite entry/entries — refusing to compute divergence",
+        )
+
+
 def kl(p: NDArray[np.float64], q: NDArray[np.float64]) -> float:
-    """KL(p || q) in nats. Robust to zeros in p (treated as 0·log0 = 0)."""
+    """KL(p || q) in nats. Robust to zeros in p (treated as 0·log0 = 0).
+
+    Raises :class:`ProbeError` on non-finite inputs.
+    """
+    _check_finite_array("p", p)
+    _check_finite_array("q", q)
     mask = p > 0.0
     safe_q = np.where(q > 0.0, q, 1e-12)
-    return float(np.sum(p[mask] * (np.log(p[mask]) - np.log(safe_q[mask]))))
+    result = float(np.sum(p[mask] * (np.log(p[mask]) - np.log(safe_q[mask]))))
+    if not math.isfinite(result):
+        raise ProbeError("divergence", f"kl computation produced non-finite result: {result}")
+    return result
 
 
 def js(p: NDArray[np.float64], q: NDArray[np.float64]) -> float:
@@ -82,9 +142,26 @@ def js(p: NDArray[np.float64], q: NDArray[np.float64]) -> float:
     The upper bound makes JS a nicer default for thresholding than raw
     KL — a user doesn't need to know their specific model's KL scale to
     pick a threshold.
+
+    Raises :class:`ProbeError` on non-finite inputs or non-finite output.
     """
+    _check_finite_array("p", p)
+    _check_finite_array("q", q)
     m = 0.5 * (p + q)
-    return 0.5 * kl(p, m) + 0.5 * kl(q, m)
+    result = 0.5 * kl(p, m) + 0.5 * kl(q, m)
+    # Defense-in-depth: clamp into the theoretical bound. JS ∈ [0, ln 2].
+    # Tiny negative or just-over-ln2 values are FP roundoff (especially
+    # when p ≈ q); broader excursions indicate upstream numerical drift,
+    # surface them as ProbeError rather than silently exceeding ln 2.
+    tol = 1e-9
+    if result < -tol or result > math.log(2.0) + tol:
+        raise ProbeError(
+            "divergence",
+            f"js computed {result:.4f} nats, outside theoretical bound "
+            f"[0, {math.log(2.0):.4f}] — likely numerical drift in upstream "
+            f"distributions",
+        )
+    return max(0.0, result)
 
 
 def divergence(base: TokenDist, ft: TokenDist, kind: Divergence = "js") -> float:

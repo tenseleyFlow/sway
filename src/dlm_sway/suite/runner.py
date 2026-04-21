@@ -23,7 +23,7 @@ import time
 from dlm_sway import __version__
 from dlm_sway.core.errors import ProbeError
 from dlm_sway.core.result import ProbeResult, SuiteResult, Verdict, utcnow
-from dlm_sway.core.scoring import DifferentialBackend
+from dlm_sway.core.scoring import DifferentialBackend, PreflightCheckable
 from dlm_sway.core.sections import Section
 from dlm_sway.probes.base import RunContext, build_probe
 from dlm_sway.probes.null_adapter import NullAdapterSpec, get_null_stats
@@ -37,8 +37,20 @@ def run(
     spec_path: str = "<memory>",
     doc_text: str | None = None,
     sections: tuple[Section, ...] | None = None,
+    skip_preflight: bool = False,
 ) -> SuiteResult:
-    """Execute every probe in ``spec`` against ``backend``."""
+    """Execute every probe in ``spec`` against ``backend``.
+
+    Before any probe runs, the runner asks the backend to preflight-check
+    itself if it implements :class:`PreflightCheckable`. On failure
+    (e.g., a NaN-weighted adapter), the runner aborts the suite with a
+    single synthetic ERROR probe and skips every configured probe — so
+    a broken model never produces a false PASS verdict (the +11639σ
+    class of bug from Audit 01).
+
+    Set ``skip_preflight=True`` to disable the gate (e.g., for sub-second
+    test suites where the cost matters); the default is to run it.
+    """
     started = utcnow()
     ctx = RunContext(
         backend=backend,
@@ -50,6 +62,38 @@ def run(
 
     results: list[ProbeResult] = []
     null_stats: dict[str, dict[str, float]] = {}
+
+    # Preflight gate: if the backend can self-check, do so before any
+    # probe runs. A failing preflight aborts the suite.
+    if not skip_preflight and isinstance(backend, PreflightCheckable):
+        t0 = time.perf_counter()
+        ok, reason = backend.preflight_finite_check()
+        duration = time.perf_counter() - t0
+        if not ok:
+            results.append(
+                ProbeResult(
+                    name="__preflight__",
+                    kind="preflight",
+                    verdict=Verdict.ERROR,
+                    score=None,
+                    message=(
+                        f"backend preflight failed — suite aborted before any probe ran. {reason}"
+                    ),
+                    duration_s=duration,
+                    evidence={"preflight_reason": reason},
+                )
+            )
+            finished = utcnow()
+            return SuiteResult(
+                spec_path=spec_path,
+                started_at=started,
+                finished_at=finished,
+                base_model_id=spec.models.base.base,
+                adapter_id=str(spec.models.ft.adapter) if spec.models.ft.adapter else "",
+                sway_version=__version__,
+                probes=tuple(results),
+                null_stats={},
+            )
 
     for raw in spec.suite:
         probe, probe_spec = build_probe(raw)

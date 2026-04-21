@@ -28,7 +28,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 Intent = Literal["generalize", "memorize", "both"]
@@ -102,7 +102,7 @@ class ParaphraseInvarianceProbe(Probe):
 
         verdict, score, msg = _decide(spec, mean_verb, mean_par, ratio)
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

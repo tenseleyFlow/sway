@@ -102,6 +102,11 @@ dev = [
     "ruff>=0.6",
     "types-pyyaml>=6.0",
     "hypothesis>=6.152.1",
+    # Required by the tiny_model fixture (snapshot_download) used by every
+    # slow+online integration test. Not transitively guaranteed by hf
+    # optional-dep because contributors may want to run integration tests
+    # without the full [hf] extra installed.
+    "huggingface_hub>=0.25",
 ]
 
 [build-system]

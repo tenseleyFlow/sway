@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Literal
 
+import numpy as np
 import pytest
 
 from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
@@ -132,3 +133,68 @@ class TestRunner:
         assert result.probes[0].verdict == Verdict.PASS
         # And the suite's null_stats bubbles up onto the result.
         assert "delta_kl" in result.null_stats
+
+
+class TestPreflightGate:
+    """The S01 preflight gate: a NaN-producing backend aborts the suite.
+
+    No probe runs; the SuiteResult contains a single synthetic ERROR
+    probe explaining the abort.
+    """
+
+    def test_preflight_failure_aborts_suite(self) -> None:
+        import math
+
+        from dlm_sway.core.scoring import TokenDist
+
+        # Seed a NaN dist on the ft side under the preflight prompt.
+        nan_dist = TokenDist(
+            token_ids=np.array([1, 2], dtype=np.int64),
+            logprobs=np.array([math.nan, -0.5], dtype=np.float32),
+            vocab_size=100,
+        )
+        ft = DummyResponses(token_dists={"preflight": nan_dist})
+        bad_backend = DummyDifferentialBackend(base=DummyResponses(), ft=ft)
+
+        spec = _spec(
+            {"name": "p1", "kind": "__runner_pass"},
+            {"name": "p2", "kind": "__runner_pass"},
+        )
+        result = run(spec, bad_backend)
+
+        # Exactly one synthetic ERROR probe; no configured probes ran.
+        assert len(result.probes) == 1
+        assert result.probes[0].kind == "preflight"
+        assert result.probes[0].verdict == Verdict.ERROR
+        assert "preflight failed" in result.probes[0].message
+        assert "ft view" in result.probes[0].message
+        # Configured probe names did not run.
+        assert "p1" not in {p.name for p in result.probes}
+
+    def test_skip_preflight_flag_runs_suite_anyway(self) -> None:
+        import math
+
+        from dlm_sway.core.scoring import TokenDist
+
+        nan_dist = TokenDist(
+            token_ids=np.array([1, 2], dtype=np.int64),
+            logprobs=np.array([math.nan, -0.5], dtype=np.float32),
+            vocab_size=100,
+        )
+        ft = DummyResponses(token_dists={"preflight": nan_dist})
+        bad_backend = DummyDifferentialBackend(base=DummyResponses(), ft=ft)
+
+        spec = _spec({"name": "p1", "kind": "__runner_pass"})
+        result = run(spec, bad_backend, skip_preflight=True)
+        # Probe ran (ignoring the unhealthy backend).
+        assert len(result.probes) == 1
+        assert result.probes[0].name == "p1"
+
+    def test_finite_backend_preflight_passes_through(
+        self, backend: DummyDifferentialBackend
+    ) -> None:
+        spec = _spec({"name": "p1", "kind": "__runner_pass"})
+        result = run(spec, backend)
+        # No synthetic preflight probe injected; configured probe ran.
+        assert len(result.probes) == 1
+        assert result.probes[0].name == "p1"

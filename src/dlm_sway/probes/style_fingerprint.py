@@ -27,7 +27,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -141,11 +141,40 @@ class StyleFingerprintProbe(Probe):
         ft_fp = fingerprint("\n".join(ft_samples))
         doc_fp = fingerprint(doc_text)
 
-        shift = _cosine_shift(base_fp, ft_fp, doc_fp)
-        verdict = Verdict.PASS if shift >= spec.assert_shift_gte else Verdict.FAIL
-        score = float(np.clip((shift + 1.0) / 2.0, 0.0, 1.0))
+        # B4 fix: a degenerate ft fingerprint (all-empty generations →
+        # zeros) used to coincidentally produce a positive cosine shift
+        # because cos(ft-base, doc-base) ≈ cos(-base, doc-base) is often
+        # positive. Detect that case and emit ERROR rather than PASS.
+        ft_is_zero = bool(np.allclose(ft_fp, 0.0))
+        ft_text_is_empty = all(not s.strip() for s in ft_samples)
+        if ft_is_zero or ft_text_is_empty:
+            return safe_finalize(
+                name=spec.name,
+                kind=spec.kind,
+                verdict=Verdict.ERROR,
+                score=None,
+                raw=None,
+                evidence={
+                    "base_fp": base_fp.tolist(),
+                    "ft_fp": ft_fp.tolist(),
+                    "doc_fp": doc_fp.tolist(),
+                    "ft_text_is_empty": ft_text_is_empty,
+                    "ft_fp_is_zero": ft_is_zero,
+                    "weight": spec.weight,
+                },
+                message=(
+                    "fine-tuned model produced empty / zero-fingerprint output — "
+                    "cannot measure style shift on a degenerate ft view"
+                ),
+            )
 
-        return ProbeResult(
+        shift = _projection_shift(base_fp, ft_fp, doc_fp)
+        verdict = Verdict.PASS if shift >= spec.assert_shift_gte else Verdict.FAIL
+        # Score: 0 at no shift, 1 when ft moves a full doc-gap toward
+        # doc; clamp to [0, 1].
+        score = float(np.clip(shift, 0.0, 1.0))
+
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
@@ -166,14 +195,25 @@ class StyleFingerprintProbe(Probe):
         )
 
 
-def _cosine_shift(
+def _projection_shift(
     base: NDArray[np.float64], ft: NDArray[np.float64], doc: NDArray[np.float64]
 ) -> float:
-    """Cosine between (ft - base) and (doc - base) in fingerprint space."""
+    """Project (ft - base) onto (doc - base), normalized by ||doc - base||².
+
+    Returns ``((ft - base) · (doc - base)) / ||doc - base||²``. Properties:
+
+    - ``ft == base`` → 0 (no shift)
+    - ``ft == doc`` → 1 (ft moved a full doc-gap toward doc)
+    - ``ft`` moved opposite to doc → negative
+    - ``doc == base`` (no doc gap to measure) → 0
+
+    This replaces the older ``cos(ft-base, doc-base)`` which silently
+    treated a zero ft-shift as a phantom positive correlation when
+    ``-base`` happened to point in roughly the doc direction (B4).
+    """
     a = ft - base
     b = doc - base
-    na = float(np.linalg.norm(a))
-    nb = float(np.linalg.norm(b))
-    if na == 0.0 or nb == 0.0:
+    nb_sq = float(np.dot(b, b))
+    if nb_sq == 0.0:
         return 0.0
-    return float(np.dot(a, b) / (na * nb))
+    return float(np.dot(a, b) / nb_sq)

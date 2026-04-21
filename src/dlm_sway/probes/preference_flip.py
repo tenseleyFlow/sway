@@ -22,7 +22,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 
@@ -83,7 +83,7 @@ class PreferenceFlipProbe(Probe):
                 (ft - base) for base, ft in zip(base_margins, ft_margins, strict=True)
             )
             verdict = Verdict.WARN
-            return ProbeResult(
+            return safe_finalize(
                 name=spec.name,
                 kind=spec.kind,
                 verdict=verdict,
@@ -106,7 +106,7 @@ class PreferenceFlipProbe(Probe):
         flip_rate = len(flipped_idx) / len(base_wrong_idx)
         verdict = Verdict.PASS if flip_rate >= spec.assert_flip_rate_gte else Verdict.FAIL
         score = min(1.0, flip_rate / max(spec.assert_flip_rate_gte, 1e-6))
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

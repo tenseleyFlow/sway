@@ -258,8 +258,8 @@ class HuggingFaceDifferentialBackend:
         try:
             # peft.PeftModel.disable_adapter is a context manager; newer
             # transformers builds ship stubs that mis-type it as a Tensor,
-            # so we warn-only there (see hf backend mypy overrides).
-            with self._peft_model.disable_adapter():
+            # so we suppress the operator check on the `with` line.
+            with self._peft_model.disable_adapter():  # type: ignore[operator]
                 yield self._make_view("base")
         finally:
             self._exit()
@@ -349,6 +349,52 @@ class HuggingFaceDifferentialBackend:
             del self._peft_model
         if self._torch.cuda.is_available():
             self._torch.cuda.empty_cache()
+
+    # -- PreflightCheckable -------------------------------------------
+
+    _PREFLIGHT_PROMPT = "hello"
+    _PREFLIGHT_TOP_K = 8
+
+    def preflight_finite_check(self) -> tuple[bool, str]:
+        """One forward pass per view; assert both produce finite logits.
+
+        Catches the +11639σ class of bug at suite-load time: a NaN-weighted
+        adapter would produce non-finite logprobs here, the runner sees
+        ``ok=False``, and the suite aborts with a single synthetic ERROR
+        probe — never reaching a probe that would pass on garbage.
+        """
+        import math
+
+        try:
+            with self.as_base() as base_view:
+                base_dist = base_view.next_token_dist(
+                    self._PREFLIGHT_PROMPT, top_k=self._PREFLIGHT_TOP_K
+                )
+            with self.as_finetuned() as ft_view:
+                ft_dist = ft_view.next_token_dist(
+                    self._PREFLIGHT_PROMPT, top_k=self._PREFLIGHT_TOP_K
+                )
+        except Exception as exc:  # noqa: BLE001 — backend may raise anything
+            return False, f"preflight forward pass raised {type(exc).__name__}: {exc}"
+
+        for label, dist in (("base", base_dist), ("ft", ft_dist)):
+            n_bad = int((~np.isfinite(dist.logprobs)).sum())
+            if n_bad > 0:
+                return (
+                    False,
+                    f"{label} view produced {n_bad}/{dist.logprobs.size} non-finite "
+                    f"logprob(s) on prompt {self._PREFLIGHT_PROMPT!r} — adapter is "
+                    f"likely broken (NaN/inf weights). sway refuses to score a model "
+                    f"producing non-finite outputs.",
+                )
+            tail = dist.tail_logprob
+            if not math.isfinite(tail):
+                return (
+                    False,
+                    f"{label} view produced non-finite tail_logprob = {tail}",
+                )
+
+        return True, ""
 
     # -- internals -----------------------------------------------------
 

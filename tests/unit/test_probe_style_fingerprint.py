@@ -113,3 +113,67 @@ class TestProbe:
         ctx = RunContext(backend=backend)
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.ERROR
+
+
+class TestB4ZeroFtFingerprint:
+    """Pins the B4 fix: a degenerate ft (empty generations / zero
+    fingerprint) must NOT pass — must produce ERROR with a clear
+    message. The historical bug used cos(ft-base, doc-base) which
+    coincidentally aligned with -base when ft was zero, producing
+    spurious +0.82 PASS verdicts."""
+
+    def test_empty_ft_generations_route_to_error(self) -> None:
+        base_samples = ["Some real prose. With multiple sentences."] * 2
+        ft_samples = ["", ""]  # broken ft model produces no text
+        doc = "Wherein clauses conjoin into meandering wholes."
+        backend = _backend_with_samples(base_samples, ft_samples)
+        probe, spec = build_probe(
+            {
+                "name": "c1",
+                "kind": "style_fingerprint",
+                "prompts": ["p0", "p1"],
+                "doc_reference": doc,
+                "assert_shift_gte": 0.0,
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.ERROR
+        assert "empty" in result.message.lower() or "degenerate" in result.message.lower()
+        # Evidence preserves the fingerprints for postmortem.
+        assert result.evidence["ft_text_is_empty"] is True
+
+    def test_whitespace_only_ft_generations_route_to_error(self) -> None:
+        base_samples = ["Some real prose."] * 2
+        ft_samples = ["   ", "\n\n"]
+        backend = _backend_with_samples(base_samples, ft_samples)
+        probe, spec = build_probe(
+            {
+                "name": "c1",
+                "kind": "style_fingerprint",
+                "prompts": ["p0", "p1"],
+                "doc_reference": "doc",
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.ERROR
+
+    def test_projection_shift_zero_when_ft_equals_base(self) -> None:
+        """ft == base → 0 shift, regardless of where doc sits."""
+        same = "Same prose. Same words."
+        backend = _backend_with_samples([same, same], [same, same])
+        probe, spec = build_probe(
+            {
+                "name": "c1",
+                "kind": "style_fingerprint",
+                "prompts": ["p0", "p1"],
+                "doc_reference": "Wholly different doc style with many words.",
+                "assert_shift_gte": 0.01,
+            }
+        )
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        # ft fp == base fp → projection is exactly 0.
+        assert result.raw == 0.0
+        assert result.verdict == Verdict.FAIL  # no shift, gate fails

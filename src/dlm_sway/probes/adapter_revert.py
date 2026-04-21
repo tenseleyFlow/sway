@@ -22,7 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlm_sway.core.errors import BackendNotAvailableError
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 
 
@@ -130,7 +130,7 @@ class AdapterRevertProbe(Probe):
         score = max(0.0, 1.0 - rate / max(spec.assert_revert_rate_lt, 1e-6))
         score = float(np.clip(score, 0.0, 1.0))
 
-        return ProbeResult(
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,

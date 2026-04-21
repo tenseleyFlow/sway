@@ -25,12 +25,13 @@ SKIP gracefully on backends that don't.
 
 from __future__ import annotations
 
+import math
 from typing import Literal
 
 import numpy as np
 from pydantic import Field
 
-from dlm_sway.core.result import ProbeResult, Verdict
+from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import ScalableDifferentialBackend
 from dlm_sway.probes._divergence import Divergence, divergence
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
@@ -96,13 +97,17 @@ class AdapterAblationProbe(Probe):
         divs_arr = np.asarray(per_lambda, dtype=np.float64)
 
         linearity = _r_squared(lambdas_arr, divs_arr)
-        saturation_lambda = _saturation_lambda(lambdas_arr, divs_arr)
+        saturation_lambda, sat_reason = _saturation_lambda(lambdas_arr, divs_arr)
         overshoot = _overshoot(lambdas_arr, divs_arr)
 
         # Pass when all three shape metrics land in their healthy bands.
         sat_lo, sat_hi = spec.assert_saturation_between
         ok_lin = linearity >= spec.assert_linearity_gte
-        ok_sat = saturation_lambda is not None and sat_lo <= saturation_lambda <= sat_hi
+        ok_sat = (
+            saturation_lambda is not None
+            and sat_lo <= saturation_lambda <= sat_hi
+            and sat_reason in ("found", "non_monotonic")
+        )
         ok_over = overshoot >= spec.assert_overshoot_gte
         verdict = Verdict.PASS if (ok_lin and ok_sat and ok_over) else Verdict.FAIL
 
@@ -111,7 +116,12 @@ class AdapterAblationProbe(Probe):
         sat_score = 1.0 if ok_sat else 0.3
         score = 0.4 * lin_score + 0.3 * sat_score + 0.3 * over_score
 
-        return ProbeResult(
+        sat_msg = (
+            f"sat_λ={saturation_lambda:.2f} ({'in' if ok_sat else 'out of'} band)"
+            if saturation_lambda is not None
+            else f"saturation undetected ({sat_reason})"
+        )
+        return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
@@ -122,18 +132,14 @@ class AdapterAblationProbe(Probe):
                 "mean_divergence_per_lambda": per_lambda,
                 "linearity": linearity,
                 "saturation_lambda": saturation_lambda,
+                "saturation_reason": sat_reason,
                 "overshoot": overshoot,
                 "passed_linearity": ok_lin,
                 "passed_saturation": ok_sat,
                 "passed_overshoot": ok_over,
                 "weight": spec.weight,
             },
-            message=(
-                f"R²={linearity:.2f}, sat_λ={saturation_lambda:.2f} "
-                f"({'in' if ok_sat else 'out of'} band), overshoot={overshoot:.2f}"
-                if saturation_lambda is not None
-                else f"R²={linearity:.2f}, saturation undetected, overshoot={overshoot:.2f}"
-            ),
+            message=f"R²={linearity:.2f}, {sat_msg}, overshoot={overshoot:.2f}",
         )
 
 
@@ -156,25 +162,53 @@ def _r_squared(x: np.ndarray, y: np.ndarray) -> float:
     return max(0.0, 1.0 - ss_res / ss_tot)
 
 
-def _saturation_lambda(lambdas: np.ndarray, divs: np.ndarray) -> float | None:
-    """Smallest λ ≤ 1.0 at which divergence reaches 90% of div(λ=1)."""
-    # Locate the index of λ=1.0 (or the closest entry ≤ 1.0).
-    candidates = np.where(np.isclose(lambdas, 1.0, atol=1e-6))[0]
-    if candidates.size == 0:
-        # Fall back to the largest λ ≤ 1.0.
-        mask = lambdas <= 1.0
-        if not mask.any():
-            return None
-        idx1 = int(np.argmax(lambdas * mask))
-    else:
-        idx1 = int(candidates[0])
-    target = 0.9 * float(divs[idx1])
-    if target <= 0:
-        return None
-    for lam, d in zip(lambdas[: idx1 + 1], divs[: idx1 + 1], strict=False):
-        if d >= target:
-            return float(lam)
-    return None
+SaturationReason = Literal["found", "flat_curve", "non_monotonic", "below_floor"]
+
+
+def _saturation_lambda(
+    lambdas: np.ndarray, divs: np.ndarray
+) -> tuple[float | None, SaturationReason]:
+    """Smallest λ at which divergence reaches 90% of ``max(divs)``.
+
+    Returns ``(value, reason)``:
+
+    - ``("found", λ)`` — saturation reached at the returned λ on a
+      monotonically-non-decreasing curve up to that point.
+    - ``("non_monotonic", λ)`` — saturation point identified but the
+      curve dipped or zigzagged on the way; probe should emit a WARN.
+    - ``("flat_curve", None)`` — every divergence value ≤ 0; adapter
+      produced no measurable signal (often: NaN / zero adapter).
+    - ``("below_floor", None)`` — defensive; shouldn't trigger with the
+      max-based target but kept for future-proofing.
+
+    The B3 fix searches the **full** λ range (not just λ ≤ 1.0) and
+    uses ``max(divs)`` as the reference, so an overshoot at λ=1.25
+    that dips at λ=1.0 still produces a meaningful saturation read.
+    """
+    if lambdas.size == 0 or divs.size == 0:
+        return None, "flat_curve"
+
+    max_div = float(divs.max())
+    if not math.isfinite(max_div) or max_div <= 0.0:
+        return None, "flat_curve"
+
+    target = 0.9 * max_div
+
+    # Search the full curve, not just ≤ 1.0.
+    saturating_idx = np.where(divs >= target)[0]
+    if saturating_idx.size == 0:
+        return None, "below_floor"
+
+    smallest_idx = int(saturating_idx.min())
+    sat_lambda = float(lambdas[smallest_idx])
+
+    # Monotonicity advisory — divs should be non-decreasing up through
+    # the saturation point. A dip is acceptable but signals shape noise.
+    monotonic = bool(np.all(np.diff(divs[: smallest_idx + 1]) >= -1e-9))
+    if not monotonic:
+        return sat_lambda, "non_monotonic"
+
+    return sat_lambda, "found"
 
 
 def _overshoot(lambdas: np.ndarray, divs: np.ndarray) -> float:

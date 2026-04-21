@@ -162,6 +162,28 @@ class ScalableDifferentialBackend(DifferentialBackend, Protocol):
 
 
 @runtime_checkable
+class PreflightCheckable(Protocol):
+    """A backend that can validate itself before any probe runs.
+
+    Returns ``(ok, reason)`` from a single forward pass per view with a
+    fixed sentinel prompt, asserting that both the base and fine-tuned
+    distributions contain finite logits.
+
+    The runner calls this at suite start; on failure it aborts with a
+    single synthetic ERROR probe explaining the issue, so a NaN-weighted
+    adapter never produces a false PASS verdict (the +11639σ class of
+    bug from Audit 01).
+
+    This Protocol is **opt-in** — backends that don't implement it run
+    without the check (the runner skips with a NOTE-level log entry).
+    All shipped backends in this version implement it; custom backends
+    are encouraged to.
+    """
+
+    def preflight_finite_check(self) -> tuple[bool, str]: ...
+
+
+@runtime_checkable
 class NullCalibratedBackend(DifferentialBackend, Protocol):
     """A differential backend that can produce a "null adapter" view.
 

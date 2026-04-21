@@ -13,10 +13,11 @@ from dlm_sway.core.errors import (
     SwayError,
 )
 from dlm_sway.core.model import LoadedModel, Model, ModelSpec
-from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
+from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict, safe_finalize
 from dlm_sway.core.scoring import (
     DifferentialBackend,
     NullCalibratedBackend,
+    PreflightCheckable,
     RollingLogprob,
     ScalableDifferentialBackend,
     ScoringBackend,
@@ -30,6 +31,7 @@ __all__ = [
     "Model",
     "ModelSpec",
     "NullCalibratedBackend",
+    "PreflightCheckable",
     "ProbeError",
     "ProbeResult",
     "RollingLogprob",
@@ -41,6 +43,7 @@ __all__ = [
     "SwayScore",
     "TokenDist",
     "Verdict",
+    "safe_finalize",
 ]
 
 __version__ = "0.1.0.dev0"
