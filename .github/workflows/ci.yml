@@ -7,7 +7,12 @@ on:
   schedule:
     # Nightly slow-lane run at 07:00 UTC.
     - cron: "0 7 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      regenerate_goldens:
+        description: "Regenerate tests/golden/expected_<platform>.json from the current run (S18)."
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -61,6 +66,7 @@ jobs:
     timeout-minutes: 2
     outputs:
       backend_touched: ${{ steps.filter.outputs.backend_touched }}
+      golden_touched: ${{ steps.filter.outputs.golden_touched }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -71,6 +77,10 @@ jobs:
               - 'src/dlm_sway/backends/**'
               - 'tests/integration/**'
               - 'pyproject.toml'
+            golden_touched:
+              - 'tests/golden/**'
+              - 'src/dlm_sway/core/golden.py'
+              - 'tests/integration/test_determinism_golden.py'
 
   slow-lane:
     # Integration tests (slow + online). Runs on: schedule, manual
@@ -106,3 +116,56 @@ jobs:
 
       - name: pytest (slow + online)
         run: uv run --no-sync pytest tests/integration -m "slow or online" --no-header -v
+
+  determinism-golden:
+    # Cross-platform determinism golden (S18). Runs on a matrix
+    # (ubuntu-latest + macos-latest) when the golden fixture or its
+    # comparator changes, plus on schedule + dispatch. macOS runners
+    # are 10× Linux cost; keep the test scope minimal (2 probes) so
+    # each leg stays under 5 min.
+    name: determinism-golden (${{ matrix.os }})
+    needs: [changes]
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.golden_touched == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TRANSFORMERS_VERBOSITY: "error"
+      # ``workflow_dispatch`` carries a boolean input that toggles
+      # regen mode. Every other trigger writes an empty string and
+      # the test asserts (default mode).
+      SWAY_UPDATE_GOLDENS: "${{ inputs.regenerate_goldens && '1' || '' }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Create venv
+        run: uv venv --python 3.11 .venv
+
+      - name: Install dev + hf extras
+        run: uv pip install -e ".[hf]" --group dev
+
+      - name: pytest (determinism golden)
+        run: uv run --no-sync pytest tests/integration/test_determinism_golden.py -m "slow or online" --no-header -v
+
+      - name: Upload regenerated golden
+        if: ${{ inputs.regenerate_goldens == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: expected-${{ matrix.os }}
+          path: tests/golden/expected_*.json
+          if-no-files-found: error
