@@ -194,6 +194,62 @@ class TestNonFiniteRejection:
         assert 0.0 <= result <= math.log(2.0) + 1e-9
 
 
+class TestDegenerateUniformRejection:
+    """Stronger-test #9 — reject a TokenDist whose top-k logprobs are
+    identical. A real model never emits bit-uniform logits; getting
+    one means lm_head broke or a fixture zeroed out logits. Silently
+    computing ``divergence`` on such a dist returns a trivial constant
+    across prompts that would contaminate ``delta_kl`` / ``cluster_kl``.
+    """
+
+    def test_perfectly_uniform_dist_is_rejected(self) -> None:
+        k = 8
+        uniform = TokenDist(
+            token_ids=np.arange(k, dtype=np.int64),
+            logprobs=np.full(k, -math.log(k), dtype=np.float32),
+            vocab_size=1000,
+        )
+        good = _dist([1, 2], [0.9, 0.1])
+        with pytest.raises(ProbeError, match="effectively-uniform"):
+            aligned_probs(good, uniform)
+
+    def test_near_uniform_real_model_shape_is_accepted(self) -> None:
+        """A broad-but-not-literally-flat dist (the shape a real model
+        with high entropy produces) must still compute a divergence."""
+        k = 8
+        lp = np.full(k, -math.log(k), dtype=np.float32)
+        # Tiny monotonic perturbation — enough to clear the 1e-9
+        # uniformity threshold without meaningfully changing the
+        # entropy.
+        lp += np.linspace(-1e-5, 1e-5, k, dtype=np.float32)
+        broad = TokenDist(
+            token_ids=np.arange(k, dtype=np.int64),
+            logprobs=lp,
+            vocab_size=1000,
+        )
+        sharp = TokenDist(
+            token_ids=np.arange(k, dtype=np.int64),
+            logprobs=np.array([-0.1] + [-5.0] * (k - 1), dtype=np.float32),
+            vocab_size=1000,
+        )
+        # No exception — and KL/JS are finite and positive.
+        result = js(*aligned_probs(sharp, broad))
+        assert math.isfinite(result)
+        assert result > 0.0
+
+    def test_single_token_dist_not_rejected(self) -> None:
+        """A distribution with only one token can't be "uniform" —
+        there's no spread to compute. The guard must short-circuit."""
+        one = TokenDist(
+            token_ids=np.array([0], dtype=np.int64),
+            logprobs=np.array([0.0], dtype=np.float32),
+            vocab_size=1000,
+        )
+        # Must not raise (``aligned_probs`` handles single-token dists
+        # fine; the degenerate check short-circuits at ``size < 2``).
+        aligned_probs(one, one)
+
+
 # ---- Hypothesis property tests ------------------------------------
 
 
