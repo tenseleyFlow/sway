@@ -75,9 +75,7 @@ def run_cmd(
         return
     try:
         weights_override = _parse_weights_flag(weights)
-        result, score_obj = _execute_spec(
-            spec, weights_override=weights_override, trace_path=trace
-        )
+        result, score_obj = _execute_spec(spec, weights_override=weights_override, trace_path=trace)
     except SwayError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=2) from exc
