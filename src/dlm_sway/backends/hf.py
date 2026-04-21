@@ -258,8 +258,11 @@ class HuggingFaceDifferentialBackend:
         try:
             # peft.PeftModel.disable_adapter is a context manager; newer
             # transformers builds ship stubs that mis-type it as a Tensor,
-            # so we suppress the operator check on the `with` line.
-            with self._peft_model.disable_adapter():  # type: ignore[operator]
+            # so we suppress the operator check on the `with` line. The
+            # ``unused-ignore`` tag makes the suppression itself a no-op
+            # when [hf] isn't installed (mypy can't see the conflicting
+            # stub and would otherwise flag the ignore as redundant).
+            with self._peft_model.disable_adapter():  # type: ignore[operator,unused-ignore]
                 yield self._make_view("base")
         finally:
             self._exit()
