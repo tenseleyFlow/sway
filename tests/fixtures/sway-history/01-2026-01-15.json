@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "sway_version": "0.1.0",
+  "base_model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
+  "adapter_id": "adapters/quillstone/v1",
+  "spec_path": "sway.yaml",
+  "started_at": "2026-01-15T02:00:00+00:00",
+  "finished_at": "2026-01-15T02:01:12+00:00",
+  "score": {
+    "overall": 0.78,
+    "band": "healthy",
+    "components": {"adherence": 0.82, "attribution": 0.76, "calibration": 0.80, "ablation": 0.72, "baseline": 1.0},
+    "weights": {"adherence": 0.30, "attribution": 0.35, "calibration": 0.20, "ablation": 0.15, "baseline": 0.0},
+    "findings": []
+  },
+  "probes": [
+    {"name": "delta_kl",                "kind": "delta_kl",                "verdict": "pass", "score": 0.85, "raw": 0.52,  "z_score": 5.2,  "message": "mean js=0.5200, z=+5.20σ vs null",             "duration_s": 1.1},
+    {"name": "section_internalization", "kind": "section_internalization", "verdict": "pass", "score": 0.72, "raw": 0.14,  "z_score": 3.8,  "message": "3/4 sections cleared; mean effective_sis=+0.140", "duration_s": 2.4},
+    {"name": "calibration_drift",       "kind": "calibration_drift",       "verdict": "pass", "score": 0.80, "raw": 0.02,  "z_score": 4.1,  "message": "4/200 items regressed (frac=2.0%)",               "duration_s": 0.9},
+    {"name": "adapter_ablation",        "kind": "adapter_ablation",        "verdict": "pass", "score": 0.72, "raw": 0.92,  "z_score": 3.5,  "message": "R²=0.92, sat_λ=0.70 (in band), overshoot=1.08",  "duration_s": 3.5}
+  ],
+  "null_stats": {},
+  "backend_stats": {}
+}
