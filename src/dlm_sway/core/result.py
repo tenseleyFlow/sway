@@ -62,6 +62,15 @@ class ProbeResult:
         One-line diagnostic. Surfaces in the terminal report.
     duration_s:
         Wall time to execute.
+    ci_95:
+        95% percentile-bootstrap confidence interval on :attr:`raw`.
+        Populated by aggregating probes (``delta_kl`` over N prompts,
+        ``calibration_drift`` over pack items, etc.) via
+        :func:`dlm_sway.core.stats.bootstrap_ci`. ``None`` when the
+        probe doesn't aggregate (``adapter_ablation``,
+        ``style_fingerprint``), when the sample count is too low to
+        bootstrap meaningfully, or when the raw value isn't finite.
+        Report surfaces it inline as ``raw [lo–hi]``.
     """
 
     name: str
@@ -75,6 +84,7 @@ class ProbeResult:
     evidence: dict[str, Any] = field(default_factory=dict)
     message: str = ""
     duration_s: float = 0.0
+    ci_95: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +191,7 @@ def safe_finalize(
     evidence: dict[str, Any] | None = None,
     message: str = "",
     duration_s: float = 0.0,
+    ci_95: tuple[float, float] | None = None,
     critical_fields: tuple[str, ...] = ("raw",),
 ) -> ProbeResult:
     """Build a :class:`ProbeResult` with defense against non-finite metrics.
@@ -252,6 +263,11 @@ def safe_finalize(
         for fname in non_finite:
             numeric_kwargs[fname] = None
 
+    # ``ci_95`` is only attached when ``raw`` survived the
+    # defensive-null sweep — a CI bracketing a nulled-out point
+    # estimate would mislead more than it informs.
+    final_ci_95 = ci_95 if numeric_kwargs["raw"] is not None else None
+
     return ProbeResult(
         name=name,
         kind=kind,
@@ -264,4 +280,5 @@ def safe_finalize(
         evidence=ev,
         message=message,
         duration_s=duration_s,
+        ci_95=final_ci_95,
     )
