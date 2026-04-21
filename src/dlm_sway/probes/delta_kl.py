@@ -9,8 +9,9 @@ on things the document cares about. A zero-divergence result is a red
 flag — the adapter is ignored.
 
 *What it can't tell you:* whether the change is semantically *correct*.
-Direction and correctness are what :mod:`dir`, :mod:`adapter_revert`,
-and the attribution probes cover.
+Direction and correctness are what :mod:`adapter_revert` and the
+attribution probes (``section_internalization``,
+``paraphrase_invariance``, ``preference_flip``) cover.
 """
 
 from __future__ import annotations
