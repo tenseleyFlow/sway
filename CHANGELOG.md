@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+### Sprint 16 — Cluster-coherent KL probe
+
+Closes Audit 01 innovation item F8. Adds a new `cluster_kl` probe that
+answers the question `delta_kl` can't: the mean divergence may be the
+same, but did the adapter shift the *right* topics, or is it a uniform
+blunt-instrument shift?
+
+- **New probe `cluster_kl`** (category: adherence). Embeds prompts via
+  shared MiniLM (same cache key as `adapter_revert`), k-means clusters
+  them at a fixed seed, measures per-prompt JS divergence between base
+  and ft, and reports a **specificity ratio**:
+  `between_variance / (between_variance + within_variance)`. Range
+  `[0, 1]`: `≈ 0.5` on a blunt adapter that shifts every topic by the
+  same amount, `→ 1.0` on a topic-targeted adapter. Pair
+  `(mean_kl, specificity)` tells a more honest story than either number
+  alone.
+- **Bootstrap CI** on specificity. Resamples `(divergence, cluster_label)`
+  pairs with replacement and takes the 2.5/97.5 percentiles of the
+  bootstrap ratio distribution. Returns `None` below 4 prompts — matches
+  the convention `core.stats.bootstrap_ci` uses.
+- **Z-score calibration** against `null_adapter` baseline via the
+  existing `_zscore` helpers. `calibrate_spec` synthesizes 8 mixed-topic
+  sentinel prompts + k=2 for the null pass; the specificity distribution
+  concentrates around 0.5 there, so a real adapter's separation above
+  that baseline reads as a clean z-score.
+- **Degenerate-input policy.** `< min_prompts` (default 20) → SKIP with
+  a clear message; `num_clusters * 2 > num_prompts` → SKIP (per-cluster
+  mean not well-resolved); empty prompt list → ERROR. Missing `[semsim]`
+  extras → SKIP with a `pip install 'dlm-sway[semsim]'` hint.
+- **Zero-variance fallback.** If every prompt produced the same
+  divergence (canned stub data, no adapter motion), the specificity
+  ratio is mathematically undefined; we return `0.5` — the null-adapter
+  expectation — so downstream z-score reports "no signal" instead of
+  NaN.
+- **New dependency.** `scikit-learn>=1.4` added to the `[semsim]` extra
+  (riding the 80 MB MiniLM load that probe already pulls in). Mirrored
+  to `[all]` and to mypy's stubless-override list.
+- **7 unit tests** in `tests/unit/test_probe_cluster_kl.py`: two-topic
+  adapter → high specificity, uniform adapter → 0.5 fallback, too-few
+  prompts → SKIP, empty prompts → ERROR, `num_clusters > prompts/2` →
+  SKIP, CI bracketing, missing-extras SKIP path.
+- **Prove-the-value test** at `tests/unit/test_cluster_kl_prove_value.py`.
+  Two backends with comparable `delta_kl` (ratio < 3×) have specificity
+  scores that split by at least 0.3 — concrete evidence that `cluster_kl`
+  surfaces a structural distinction `delta_kl` merges.
+
 ### Sprint 15 — pytest plugin (`@pytest.mark.sway`)
 
 Closes Audit 01 innovation item F10. Packages sway as a pytest
