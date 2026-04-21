@@ -38,9 +38,12 @@ def _dist_sharp(seed_offset: int = 0) -> TokenDist:
 
 
 def _dist_broad() -> TokenDist:
-    """Broad distribution: uniform over top-k."""
+    """Broad distribution: uniform over top-k, with a tiny monotonic
+    perturbation so it clears ``_divergence``'s uniformity guard (a
+    literally-flat dist looks like a broken lm_head)."""
     k = 8
     lp = np.full(k, -math.log(k), dtype=np.float32)
+    lp += np.linspace(-1e-4, 1e-4, k, dtype=np.float32)
     residual = 1.0 - float(np.exp(lp).sum())
     tail = math.log(residual) if residual > 1e-12 else None
     return TokenDist(
