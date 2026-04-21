@@ -103,6 +103,128 @@ def _handle_with_many_instruction_probes(n: int) -> DlmHandle:
     )
 
 
+class TestSkippedProbesRollup:
+    """F07 (Audit 03) — ``_render_annotated_yaml`` prepends a
+    ``# skipped: <probe> (<reason>)`` block so users see which probes
+    the autogen intentionally omitted, without diffing this module's
+    docstring."""
+
+    def test_prose_only_handle_omits_instruction_heavy_probes(self) -> None:
+        """A .dlm with only PROSE sections skips adapter_revert +
+        paraphrase_invariance + preference_flip + (with 1 section)
+        section_internalization."""
+        from dlm_sway.integrations.dlm.autogen import collect_skipped_probe_reasons
+
+        handle = DlmHandle(
+            dlm_id="x",
+            base_model="b",
+            adapter_path=Path("/tmp/a"),
+            sections=(
+                Section(
+                    id="s1",
+                    kind="prose",
+                    content="One paragraph of prose. Second sentence.",
+                ),
+            ),
+            doc_text="doc",
+        )
+        skipped = collect_skipped_probe_reasons(handle)
+        skipped_kinds = {k for k, _ in skipped}
+        assert "adapter_revert" in skipped_kinds
+        assert "paraphrase_invariance" in skipped_kinds
+        assert "preference_flip" in skipped_kinds
+        assert "section_internalization" in skipped_kinds
+        # delta_kl should NOT be skipped — prose provides a fallback
+        # prompt pool.
+        assert "delta_kl" not in skipped_kinds
+
+    def test_instruction_only_handle_omits_prose_heavy_probes(self) -> None:
+        """An instruction-only doc skips external_perplexity + leakage."""
+        from dlm_sway.core.sections import SectionProbe
+        from dlm_sway.integrations.dlm.autogen import collect_skipped_probe_reasons
+
+        handle = DlmHandle(
+            dlm_id="x",
+            base_model="b",
+            adapter_path=Path("/tmp/a"),
+            sections=(
+                Section(
+                    id="i1",
+                    kind="instruction",
+                    content="Q/A",
+                    probes=(SectionProbe(prompt="Q?", gold="A"),),
+                ),
+            ),
+            doc_text=None,
+        )
+        skipped = collect_skipped_probe_reasons(handle)
+        skipped_kinds = {k for k, _ in skipped}
+        assert "external_perplexity" in skipped_kinds
+        assert "leakage" in skipped_kinds
+
+    def test_rendered_yaml_carries_skipped_block(self, tmp_path: Path) -> None:
+        """End-to-end: on a minimal prose-only .dlm, the rendered YAML
+        header has the ``# skipped:`` lines."""
+        from dlm_sway.integrations.dlm.autogen import (
+            _render_annotated_yaml,
+            build_spec_dict,
+            collect_skipped_probe_reasons,
+        )
+
+        handle = DlmHandle(
+            dlm_id="x",
+            base_model="b",
+            adapter_path=Path("/tmp/a"),
+            sections=(Section(id="s1", kind="prose", content="Short prose."),),
+            doc_text="doc",
+        )
+        dlm_path = tmp_path / "demo.dlm"
+        dlm_path.write_text("# empty")
+        spec = build_spec_dict(handle, dlm_source="demo.dlm")
+        skipped = collect_skipped_probe_reasons(handle)
+        rendered = _render_annotated_yaml(spec, handle, dlm_path, skipped=skipped)
+        assert "# skipped: adapter_revert" in rendered
+        assert "# skipped: preference_flip" in rendered
+        assert "(no " in rendered  # reasons start with "no ..."
+
+    def test_rendered_yaml_omits_skipped_block_when_all_probes_fit(self) -> None:
+        """A heavily-populated doc that triggers every probe emits no
+        ``# skipped:`` lines."""
+        from dlm_sway.core.sections import SectionPreference, SectionProbe
+        from dlm_sway.integrations.dlm.autogen import (
+            _render_annotated_yaml,
+            build_spec_dict,
+            collect_skipped_probe_reasons,
+        )
+
+        probes = tuple(SectionProbe(prompt=f"Q{i}?", gold=f"A{i}") for i in range(25))
+        preferences = (SectionPreference(prompt="P1", chosen="good", rejected="bad"),)
+        handle = DlmHandle(
+            dlm_id="x",
+            base_model="b",
+            adapter_path=Path("/tmp/a"),
+            sections=(
+                Section(id="i1", kind="instruction", content="Q/A", probes=probes),
+                Section(
+                    id="p1",
+                    kind="prose",
+                    content="A first prose sentence. A second. A third.",
+                ),
+                Section(
+                    id="pref1",
+                    kind="preference",
+                    content="pref",
+                    preferences=preferences,
+                ),
+            ),
+            doc_text="doc",
+        )
+        spec = build_spec_dict(handle)
+        skipped = collect_skipped_probe_reasons(handle)
+        rendered = _render_annotated_yaml(spec, handle, Path("/tmp/demo.dlm"), skipped=skipped)
+        assert "# skipped:" not in rendered
+
+
 class TestPortableDlmSource:
     """F09 (Audit 03) — ``_portable_dlm_source`` emits a cwd-relative
     path when the ``.dlm`` lives inside the cwd (survives CI checkout),
