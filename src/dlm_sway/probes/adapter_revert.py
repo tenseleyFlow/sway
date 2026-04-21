@@ -17,6 +17,7 @@ drive a revert decision, and we'd rather be honest than lossy.
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -180,8 +181,15 @@ class AdapterRevertProbe(Probe):
         )
 
 
+@functools.lru_cache(maxsize=4)
 def _load_embedder(model_id: str):  # type: ignore[no-untyped-def]
-    """Return a callable ``list[str] -> np.ndarray`` over encoded vectors."""
+    """Return a callable ``list[str] -> np.ndarray`` over encoded vectors.
+
+    Cached: a SentenceTransformer load is ~80–200 MB and ~5 s on cold
+    cache. A suite that runs ``adapter_revert`` against multiple
+    adapters or back-to-back over diff'd prompt sets re-uses the same
+    embedder instead of paying the load cost per probe (B9).
+    """
     try:
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
