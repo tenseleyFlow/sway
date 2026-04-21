@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
+from dlm_sway.backends._instrumentation import BackendInstrumentation
 from dlm_sway.core.errors import BackendNotAvailableError, ProbeError
 from dlm_sway.core.model import ModelSpec
 from dlm_sway.core.scoring import RollingLogprob, TokenDist
@@ -90,7 +91,10 @@ class _HFView:
     """One side (base or ft) of a :class:`HuggingFaceDifferentialBackend`.
 
     Both sides reuse the same underlying module; the difference is
-    whether the adapter is active.
+    whether the adapter is active. Scoring calls route through
+    ``_inst`` (the backend's shared cache + tracer + stats) so repeated
+    forward passes on the same ``(view_id, prompt, top_k)`` are served
+    from the LRU instead of re-executed — the Sprint 07 performance win.
     """
 
     id: str
@@ -98,6 +102,7 @@ class _HFView:
     _tokenizer: Any
     _device: str
     _pad_token_id: int
+    _inst: BackendInstrumentation
 
     # -- Model ---------------------------------------------------------
     def generate(
@@ -109,6 +114,10 @@ class _HFView:
         top_p: float = 1.0,
         seed: int = 0,
     ) -> str:
+        # Generation is intentionally *not* cached — probes call it
+        # through (prompt, max_new_tokens, temperature, seed) tuples
+        # that rarely collide across a suite, and cache hits on sampled
+        # output would hide seed bugs behind stale strings.
         import torch
 
         torch.manual_seed(seed)
@@ -132,6 +141,19 @@ class _HFView:
 
     # -- ScoringBackend ------------------------------------------------
     def logprob_of(self, prompt: str, completion: str) -> float:
+        # Fold (prompt, completion) into one cache-key string so a repeat
+        # (q, a) pair hits the cache without the completion args needing
+        # their own slot in ``ForwardCache``.
+        key_prompt = f"{prompt}\x00{completion}"
+        return self._inst.cached(
+            "logprob_of",
+            self.id,
+            key_prompt,
+            0,
+            lambda: self._compute_logprob_of(prompt, completion),
+        )
+
+    def _compute_logprob_of(self, prompt: str, completion: str) -> float:
         import torch
         import torch.nn.functional as F
 
@@ -155,6 +177,15 @@ class _HFView:
         return float(gathered.sum().item())
 
     def rolling_logprob(self, text: str) -> RollingLogprob:
+        return self._inst.cached(
+            "rolling_logprob",
+            self.id,
+            text,
+            0,
+            lambda: self._compute_rolling_logprob(text),
+        )
+
+    def _compute_rolling_logprob(self, text: str) -> RollingLogprob:
         import torch
         import torch.nn.functional as F
 
@@ -178,6 +209,15 @@ class _HFView:
         )
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
+        return self._inst.cached(
+            "next_token_dist",
+            self.id,
+            prompt,
+            top_k,
+            lambda: self._compute_next_token_dist(prompt, top_k=top_k),
+        )
+
+    def _compute_next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         import torch
         import torch.nn.functional as F
 
@@ -260,6 +300,14 @@ class HuggingFaceDifferentialBackend:
         self._peft_model: PreTrainedModel = peft_model
         self._pad_token_id: int = int(tokenizer.pad_token_id)
         self._active: str | None = None
+        # Shared cache + trace + stats (Sprint 07). The instrumentation
+        # instance outlives individual view entries — entering/exiting
+        # ``as_base()`` doesn't reset the cache, because each view id
+        # (``"base"`` / ``"ft"`` / ``"scaled_0.50"`` / ``"null_42"``)
+        # is part of the cache key. A future toggle bug that fails to
+        # flip the view would surface as a cache hit returning the
+        # wrong side's value — integration tests cover this.
+        self._inst = BackendInstrumentation()
 
     # -- DifferentialBackend -------------------------------------------
 
@@ -358,7 +406,10 @@ class HuggingFaceDifferentialBackend:
             self._exit()
 
     def close(self) -> None:
-        """Release GPU memory. Safe to call more than once."""
+        """Release GPU memory + flush the trace writer. Safe to call more than once."""
+        inst = getattr(self, "_inst", None)
+        if inst is not None:
+            inst.close()
         if getattr(self, "_peft_model", None) is not None:
             del self._peft_model
         if self._torch.cuda.is_available():
@@ -430,6 +481,7 @@ class HuggingFaceDifferentialBackend:
             _tokenizer=self._tokenizer,
             _device=self._device,
             _pad_token_id=self._pad_token_id,
+            _inst=self._inst,
         )
 
     def _enter(self, mode: str) -> None:
