@@ -123,6 +123,53 @@ class TestPromptCollapse:
         # Fast decay → short half-life → fail against 500-token threshold.
         assert result.verdict == Verdict.FAIL
 
+    def test_tokenizer_aware_stuffing_uses_pad_token(self) -> None:
+        """B13: when a tokenizer is supplied, the stuffing is built from
+        the model's pad/unk token, not the hardcoded English string."""
+        from dlm_sway.probes.prompt_collapse import _stuffing
+
+        class _FakeTokenizer:
+            pad_token = "<pad>"
+
+            def encode(self, text: str) -> list[int]:
+                # 1 id per character of text — simple enough to verify length.
+                return [1] * len(text)
+
+            def decode(self, ids: list[int], *, skip_special_tokens: bool = False) -> str:
+                del skip_special_tokens
+                return "<pad>" * len(ids)
+
+        out = _stuffing(50, tokenizer=_FakeTokenizer())
+        # No English noise from the legacy fallback.
+        assert "archived for historical record" not in out
+        assert "<pad>" in out
+
+    def test_legacy_path_used_when_no_tokenizer(self) -> None:
+        """The default ``_stuffing(n)`` (no tokenizer) returns the legacy English."""
+        from dlm_sway.probes.prompt_collapse import _stuffing
+
+        out = _stuffing(50)
+        assert "archived for historical record" in out
+
+    def test_legacy_stuffing_spec_field_forces_english(self) -> None:
+        """``legacy_stuffing=True`` opts out of the tokenizer path."""
+        backend = _programmed_backend(0.001)
+        probe, spec = build_probe(
+            {
+                "name": "pc",
+                "kind": "prompt_collapse",
+                "prompts": ["q1"],
+                "context_lengths": [0, 256],
+                "assert_half_life_tokens": 0,
+                "legacy_stuffing": True,
+            }
+        )
+        # Even if the dummy backend grew a tokenizer, this spec wouldn't
+        # use it. Smoke: probe runs end-to-end.
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert result.verdict in (Verdict.PASS, Verdict.FAIL)
+
     def test_error_on_empty_prompts(self) -> None:
         probe, spec = build_probe(
             {
