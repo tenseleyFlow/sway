@@ -196,11 +196,18 @@ class LeakageSusceptibilityProbe(Probe):
 
 
 def _lcs_ratio(generated: str, target: str) -> float:
-    """Longest common subsequence ratio via difflib.
+    """Ratcliff-Obershelp gestalt similarity via ``difflib.SequenceMatcher.ratio()``.
 
-    Returns 0 for empty inputs, 1.0 for identical strings. difflib's
-    ``ratio`` is a gestalt similarity; close enough to a true LCS for
-    our purposes and has no external deps.
+    The function name is a historical misnomer — this is *not* longest
+    common subsequence. Gestalt similarity finds the longest matching
+    contiguous substring, then recurses on the unmatched bookends; it
+    overweights long verbatim runs in a way that closely tracks LCS for
+    leakage-detection purposes (verbatim recital is the failure mode we
+    actually care about), and ships in the stdlib with no external dep.
+
+    Returns 0 for empty inputs, 1.0 for identical strings. Renaming the
+    function would be a breaking change for any external consumer —
+    deferred until a v0.2 cleanup pass.
     """
     if not generated or not target:
         return 0.0
