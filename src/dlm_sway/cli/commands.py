@@ -57,6 +57,17 @@ def run_cmd(
             ),
         ),
     ] = False,
+    trace: Annotated[
+        Path | None,
+        typer.Option(
+            "--trace",
+            help=(
+                "Write a forward-pass trace (JSONL) to this path — one event "
+                "per backend scoring call with probe / view / cache-hit info. "
+                "Useful for perf investigation; zero overhead when unset."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Execute a suite and render a terminal report."""
     if dry_run:
@@ -64,7 +75,9 @@ def run_cmd(
         return
     try:
         weights_override = _parse_weights_flag(weights)
-        result, score_obj = _execute_spec(spec, weights_override=weights_override)
+        result, score_obj = _execute_spec(
+            spec, weights_override=weights_override, trace_path=trace
+        )
     except SwayError as exc:
         typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=2) from exc
@@ -595,6 +608,7 @@ def _execute_spec(
     path: Path,
     *,
     weights_override: dict[str, float] | None = None,
+    trace_path: Path | None = None,
 ) -> tuple[SuiteResult, SwayScore]:
     """Load a spec, build a backend, run the suite, fold scores. Shared
     by ``run`` and ``gate``. Picks up .dlm-derived sections when the
@@ -654,7 +668,14 @@ def _execute_spec(
     else:
         backend = build_two_separate(spec.models)
     try:
-        result = run_suite(spec, backend, spec_path=str(path), sections=sections, doc_text=doc_text)
+        result = run_suite(
+            spec,
+            backend,
+            spec_path=str(path),
+            sections=sections,
+            doc_text=doc_text,
+            trace_path=trace_path,
+        )
     finally:
         _close_if_possible(backend)
     effective_weights = weights_override or spec.defaults.score_weights
