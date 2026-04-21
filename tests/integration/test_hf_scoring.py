@@ -90,8 +90,10 @@ class TestLogprobOf:
             lp_base = b.logprob_of(prompt, completion)
         with hf_backend.as_finetuned() as f:
             lp_ft = f.logprob_of(prompt, completion)
-        assert math.isfinite(lp_base) and lp_base < 0.0
-        assert math.isfinite(lp_ft) and lp_ft < 0.0
+        assert math.isfinite(lp_base)
+        assert lp_base < 0.0
+        assert math.isfinite(lp_ft)
+        assert lp_ft < 0.0
 
     def test_zero_token_completion_raises_probe_error(
         self, hf_backend: HuggingFaceDifferentialBackend
