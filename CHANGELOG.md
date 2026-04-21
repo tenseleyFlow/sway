@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Sprint 03 — Documentation truth & dead code
+
+Closes Audit 01 findings P03, P04, P05, P07 (doc), P08, P09, P10, P14,
+P15, P17, P18.
+
+- **Determinism is now wired** (P09): the suite runner calls
+  `dlm_sway.core.determinism.seed_everything(spec.defaults.seed)` before
+  any backend work runs. The achieved determinism class (`strict` /
+  `best_effort` / `loose`) is captured in `SuiteResult.determinism` and
+  surfaces in the report footer + JSON payload + markdown header.
+- **`defaults.differential: false` works end-to-end** (P14): new
+  `backends/two_model.py` with `TwoModelDifferential` wrapper +
+  `build_two_separate(spec_models)` helper. `_execute_spec` routes to
+  the wrapper when the flag is false. Doubles memory; primarily for
+  custom backends that can't toggle adapters in place.
+- **`score_weights` overridable from YAML and CLI** (P15): new
+  `SuiteDefaults.score_weights` field with subset-validating pydantic
+  field validator (rejects unknown categories, negative weights, all-zero
+  weights). New `--weights k=v,k=v` flag on `sway run` and `sway gate`.
+  Partial overrides merge with `DEFAULT_COMPONENT_WEIGHTS` so users
+  rarely have to respecify all five categories.
+- **`baseline` row labeled `(informational)` with weight 0.0 explicit**
+  (P08, B18): added to `DEFAULT_COMPONENT_WEIGHTS` so the row appears
+  in reports for transparency but contributes nothing to the composite.
+  Terminal renderer adds the `(informational)` annotation column;
+  markdown table adds a `weight` column with the same label.
+- **Extended (9-dim) style fingerprint when `[style]` is installed**
+  (P10): `style_fingerprint` now actually uses spaCy POS-tagging and
+  textstat syllable counting. Three new dims appended to the existing 6:
+  passive-voice rate, POS 4-gram entropy (Shannon, bits), syllables per
+  word. Spec field `extended: "auto" | "on" | "off"` (default `"auto"`)
+  controls the path. `evidence["schema_version"]` bumped to `2` so
+  snapshot consumers can branch on dimensionality.
+- **Stale "Known gaps" entries refreshed** (P03, P04, P05): removed
+  "null_adapter not yet wired" (delivered in S01/S02), "custom backend
+  stubbed" (it's full), "MLX paths raise" (rewritten to describe the
+  real limitation: two model copies because `mlx_lm` has no runtime
+  adapter toggle).
+- **README adds determinism + weights + differential documentation**
+  and a calibration paragraph that points at the per-kind null matrix.
+- **`delta_kl` docstring rot fixed** (P17): dropped the dead
+  ``:mod:`dir``` reference.
+- **Meta-test `test_no_dead_options.py`** (P14/P15 regression guard):
+  greps the source tree for documented spec/CLI option names and
+  asserts each has a consumer outside its declaration site. Catches the
+  exact "documented but unused" pattern Audit 01 flagged.
+
 ### Sprint 02 — Universal z-score calibration
 
 Closes Audit 01 findings P02 (delivery), B2, C9.
