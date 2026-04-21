@@ -374,21 +374,40 @@ class HuggingFaceDifferentialBackend:
             self._exit()
 
     @contextmanager
-    def as_null_adapter(self, seed: int, *, init_scale: float = 0.02) -> Iterator[_HFView]:
+    def as_null_adapter(
+        self, seed: int, *, init_scale: float = 0.02, rank_scale: float = 1.0
+    ) -> Iterator[_HFView]:
         """Temporarily replace every LoRA ``A``/``B`` tensor with random noise.
 
         Same rank, alpha, and target modules as the real adapter — only
         the weights differ. This is the denominator in every z-score
         path: "how much signal does structural noise produce?"
 
+        ``rank_scale`` simulates a null adapter at a different effective
+        rank without reshaping any tensor. The LoRA output ``A·B`` is a
+        sum of ``r`` rank-1 outer products; its output variance scales
+        linearly with ``r``. So a ``rank_scale`` of 0.5 is equivalent to
+        halving the rank in output-variance terms, which we get by
+        scaling both factors' noise std by ``sqrt(rank_scale)``. The
+        PEFT tensors keep their original shapes; no surgery on
+        alpha/scaling; no model reload.
+
         Implementation walks the PEFT module tree for ``lora_A``/``lora_B``
         parameters, saves a clone of each current value, overwrites in
-        place with a zero-mean Gaussian at ``init_scale``, and restores
-        on exit (including on exception).
+        place with a zero-mean Gaussian at ``init_scale *
+        sqrt(rank_scale)``, and restores on exit (including on exception).
         """
+        import math
+
         import torch
 
-        self._enter(f"null({seed})")
+        if rank_scale <= 0.0 or not math.isfinite(rank_scale):
+            raise ValueError(f"rank_scale must be positive and finite; got {rank_scale!r}")
+
+        effective_scale = init_scale * math.sqrt(rank_scale)
+        view_id = f"null_{seed}" if rank_scale == 1.0 else f"null_{seed}_rank{rank_scale:.2f}"
+
+        self._enter(view_id)
         gen = torch.Generator(device="cpu").manual_seed(int(seed))
         saved: list[tuple[torch.nn.Parameter, torch.Tensor]] = []
         try:
@@ -402,8 +421,8 @@ class HuggingFaceDifferentialBackend:
                         generator=gen,
                         dtype=torch.float32,
                     ).to(dtype=param.dtype, device=param.device)
-                    param.copy_(noise * init_scale)
-            yield self._make_view(f"null_{seed}")
+                    param.copy_(noise * effective_scale)
+            yield self._make_view(view_id)
         finally:
             with torch.no_grad():
                 for param, original in saved:

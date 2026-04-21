@@ -70,6 +70,19 @@ class RunContext:
         :class:`~collections.abc.Mapping` and constructed from a
         ``MappingProxyType`` so probes can't accidentally mutate the
         stats other probes will consume.
+
+        When ``null_adapter`` was run with multiple ``rank_multipliers``,
+        this field carries the 1.0x group (or the first multiplier when
+        1.0 isn't present) for back-compat with probes that consume a
+        single calibration level. For the full rank profile, consult
+        :attr:`null_stats_by_rank`.
+    null_stats_by_rank:
+        Null-adapter stats across every rank multiplier the
+        ``null_adapter`` probe calibrated. Outer key is the canonical
+        rank label (``"rank_1.00"``, ``"rank_0.50"``, …); inner key is
+        the probe kind. Empty when a single-rank calibration ran —
+        probes that render a rank profile should check length > 1
+        before surfacing it.
     downstream_kinds:
         Tuple of probe kinds that appear *after* the current probe in
         the suite. Populated by the runner before each probe runs;
@@ -83,6 +96,9 @@ class RunContext:
     sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
     null_stats: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+    null_stats_by_rank: Mapping[str, Mapping[str, Mapping[str, float]]] = field(
+        default_factory=dict
+    )
     downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
 
 

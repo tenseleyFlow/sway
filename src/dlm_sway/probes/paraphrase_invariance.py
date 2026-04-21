@@ -34,9 +34,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 Intent = Literal["generalize", "memorize", "both"]
 
@@ -145,6 +146,7 @@ class ParaphraseInvarianceProbe(Probe):
         # near zero).
         stats = get_null_stats(ctx, spec.kind)
         z = z_score(mean_verb, stats)
+        z_by_rank = z_scores_by_rank(mean_verb, get_null_stats_by_rank(ctx, spec.kind), sign=+1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -174,6 +176,7 @@ class ParaphraseInvarianceProbe(Probe):
                 "intent": spec.intent,
                 "per_case": per_case[:8],
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=msg,
         )

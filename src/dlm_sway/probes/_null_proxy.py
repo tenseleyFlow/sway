@@ -47,6 +47,11 @@ class NullCalibrationBackendProxy:
         view (deterministic).
     init_scale:
         Forwarded to ``as_null_adapter(init_scale=…)``.
+    rank_scale:
+        Forwarded to ``as_null_adapter(rank_scale=…)``. Defaults to
+        1.0 for parity with pre-S10 behavior. ``NullAdapterProbe``
+        builds one proxy per ``rank_multipliers`` entry when calibrating
+        across ranks.
     """
 
     def __init__(
@@ -55,10 +60,12 @@ class NullCalibrationBackendProxy:
         *,
         seed: int,
         init_scale: float = 0.02,
+        rank_scale: float = 1.0,
     ) -> None:
         self._inner = inner
         self._seed = seed
         self._init_scale = init_scale
+        self._rank_scale = rank_scale
 
     @contextmanager
     def as_base(self) -> Iterator[ScoringModel]:
@@ -75,7 +82,9 @@ class NullCalibrationBackendProxy:
         adapter is structural noise" — which is the calibration
         question.
         """
-        with self._inner.as_null_adapter(self._seed, init_scale=self._init_scale) as view:
+        with self._inner.as_null_adapter(
+            self._seed, init_scale=self._init_scale, rank_scale=self._rank_scale
+        ) as view:
             yield view
 
 

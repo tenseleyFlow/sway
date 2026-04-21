@@ -30,9 +30,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 
 class CalibrationItemSpec(ProbeSpec):
@@ -130,6 +131,9 @@ class CalibrationDriftProbe(Probe):
         stats = get_null_stats(ctx, spec.kind)
         raw_z = z_score(frac_regressed, stats)
         z = -raw_z if raw_z is not None else None
+        z_by_rank = z_scores_by_rank(
+            frac_regressed, get_null_stats_by_rank(ctx, spec.kind), sign=-1
+        )
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -174,6 +178,7 @@ class CalibrationDriftProbe(Probe):
                 "worst_offenders": worst,
                 "regression_nats_threshold": spec.regression_nats,
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=message,
         )

@@ -33,9 +33,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
@@ -345,6 +346,7 @@ class StyleFingerprintProbe(Probe):
 
         stats = get_null_stats(ctx, spec.kind)
         z = z_score(shift, stats)
+        z_by_rank = z_scores_by_rank(shift, get_null_stats_by_rank(ctx, spec.kind), sign=+1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -378,6 +380,7 @@ class StyleFingerprintProbe(Probe):
                 "extended": use_extended,
                 "schema_version": FINGERPRINT_SCHEMA_VERSION,
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=message,
         )

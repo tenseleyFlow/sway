@@ -214,10 +214,18 @@ class NullCalibratedBackend(DifferentialBackend, Protocol):
     Implementations MUST restore the real adapter on exit, including
     on exceptions, so a caller can freely interleave null and real
     calibrations within the same backend lifetime.
+
+    ``rank_scale`` lets callers simulate a null adapter of a different
+    effective rank without reshaping the underlying PEFT tensors. The
+    output variance of the LoRA product ``A·B`` scales linearly with
+    rank, so a faithful rank-``r · rank_scale`` null is approximated
+    by scaling each factor's noise std by ``sqrt(rank_scale)``.
+    Implementations MUST multiply ``init_scale`` by ``sqrt(rank_scale)``
+    internally (and reject negative or zero values).
     """
 
     def as_null_adapter(
-        self, seed: int, *, init_scale: float = 0.02
+        self, seed: int, *, init_scale: float = 0.02, rank_scale: float = 1.0
     ) -> AbstractContextManager[_ScoringModel]: ...
 
 

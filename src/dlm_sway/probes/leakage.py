@@ -27,9 +27,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 PerturbationKind = Literal[
     "typo",
@@ -167,6 +168,7 @@ class LeakageSusceptibilityProbe(Probe):
         stats = get_null_stats(ctx, spec.kind)
         raw_z = z_score(mean_clean, stats)
         z = -raw_z if raw_z is not None else None
+        z_by_rank = z_scores_by_rank(mean_clean, get_null_stats_by_rank(ctx, spec.kind), sign=-1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -206,6 +208,7 @@ class LeakageSusceptibilityProbe(Probe):
                 "mean_fragility": mean_fragility,
                 "per_section": per_section[:10],
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=message,
         )

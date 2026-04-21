@@ -97,3 +97,65 @@ def no_calibration_note(probe_kind: str) -> str:
     code looks for when formatting rows.
     """
     return f"(no calibration for {probe_kind})"
+
+
+def z_scores_by_rank(
+    raw: float,
+    stats_by_rank: Mapping[str, Mapping[str, float]] | None,
+    *,
+    sign: int = 1,
+) -> dict[str, float] | None:
+    """Compute per-rank z-scores for a probe's raw metric.
+
+    Parameters
+    ----------
+    raw:
+        The probe's raw metric at the real adapter.
+    stats_by_rank:
+        ``{rank_key: null_stats}`` from
+        :func:`dlm_sway.probes.null_adapter.get_null_stats_by_rank`.
+        ``None`` short-circuits to ``None``.
+    sign:
+        ``+1`` for higher-is-better probes (default), ``-1`` for
+        lower-is-better. Applied after the raw z computation so each
+        probe keeps its existing sign convention unchanged.
+
+    Returns
+    -------
+    ``{rank_key: z}`` with only the ranks that produced a finite z
+    (divergent std or non-finite inputs drop out silently). ``None``
+    when ``stats_by_rank`` is ``None`` or empty.
+    """
+    if not stats_by_rank:
+        return None
+    out: dict[str, float] = {}
+    for rkey, s in stats_by_rank.items():
+        z = z_score(raw, s)
+        if z is None:
+            continue
+        out[rkey] = sign * z
+    return out or None
+
+
+def format_z_profile(z_by_rank: Mapping[str, float] | None) -> str:
+    """Render ``{rank_key: z}`` as ``+4.2σ @ 1x / +6.8σ @ 0.5x / +2.1σ @ 2x``.
+
+    Rank labels are rendered as ``{multiplier}x`` (e.g. ``0.5x``) when
+    they parse as ``rank_<float>``; anything else is passed through
+    verbatim. ``None`` or empty input returns the empty string so
+    callers can unconditionally append with ``f"{z} {profile}".rstrip()``.
+    """
+    if not z_by_rank:
+        return ""
+    parts: list[str] = []
+    for rkey, z in z_by_rank.items():
+        if rkey.startswith("rank_"):
+            try:
+                mult = float(rkey.removeprefix("rank_"))
+                label = f"{mult:g}x"
+            except ValueError:
+                label = rkey
+        else:
+            label = rkey
+        parts.append(f"{z:+.2f}σ @ {label}")
+    return " / ".join(parts)

@@ -24,10 +24,11 @@ Metric: ``mean_delta_nats`` is the mean of per-token logprob deltas
 values mean ft assigns higher probability to external prose than base
 did (rare but possible on a multilingual adapter that improved English
 modeling incidentally). Negative values mean ft's perplexity rose
-(forgetting). The z-score path compares this delta against a null
-adapter's distribution; lower-is-better so the z is negated before the
-shared ``z >= assert_z_gte`` rule (adapter scores PASS when it's σ
-*better than null* on external perplexity).
+(forgetting). The metric is higher-is-better, so the raw z-score
+against a null-adapter distribution maps directly onto the shared
+``z >= assert_z_gte`` rule — no sign flip: the adapter passes when
+``mean_delta`` sits at least ``assert_z_gte`` σ *above* the null's
+distribution of ``mean_delta`` on the same corpus.
 """
 
 from __future__ import annotations
@@ -49,9 +50,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 CorpusName = Literal["public_domain_en"]
 
@@ -76,12 +78,12 @@ class ExternalPerplexitySpec(ProbeSpec):
     """Fallback threshold when no null stats are available. Mean
     per-token logprob delta must be ≥ this (negative = worse ft)."""
     assert_z_gte: float = 3.0
-    """Z-score pass criterion against the null-adapter baseline. This is
-    a lower-is-better probe (we want *smaller* perplexity rise than the
-    null adapter), so the z-score is negated before comparison: the
-    adapter must be at least ``assert_z_gte`` σ *below* the null
-    baseline's ``mean_delta`` distribution — equivalently, σ *better
-    than noise* on external prose fluency."""
+    """Z-score pass criterion against the null-adapter baseline.
+    ``mean_delta`` is higher-is-better (positive = ft is more confident
+    on external prose than base), so the raw z-score is compared
+    directly: the adapter must be at least ``assert_z_gte`` σ *above*
+    the null baseline's ``mean_delta`` distribution — σ *better than
+    noise* on external prose fluency."""
 
 
 class ExternalPerplexityProbe(Probe):
@@ -179,11 +181,13 @@ class ExternalPerplexityProbe(Probe):
         base_mean_per_tok = total_base_lp / max(total_base_tokens, 1)
         ft_mean_per_tok = total_ft_lp / max(total_ft_tokens, 1)
 
-        # Null calibration is the preferred path: sign-flip the z-score
-        # so ``z >= assert_z_gte`` reads as "σ better than noise."
+        # Null calibration is the preferred path. ``mean_delta`` is
+        # higher-is-better (positive = ft assigns higher probability to
+        # external prose than base did), so the raw z-score already
+        # reads as "σ better than noise" — no sign flip.
         stats = get_null_stats(ctx, spec.kind)
-        raw_z = z_score(mean_delta, stats)
-        z = -raw_z if raw_z is not None else None
+        z = z_score(mean_delta, stats)
+        z_by_rank = z_scores_by_rank(mean_delta, get_null_stats_by_rank(ctx, spec.kind), sign=+1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -191,7 +195,7 @@ class ExternalPerplexityProbe(Probe):
             score = score_val if score_val is not None else 0.0
             message = (
                 f"external_ppl delta={mean_delta:+.3f} nats/tok, "
-                f"z={z:+.2f}σ vs null (lower-is-better)"
+                f"z={z:+.2f}σ vs null (higher-is-better)"
             )
         else:
             verdict = Verdict.PASS if mean_delta >= spec.assert_mean_delta_gte else Verdict.FAIL
@@ -219,6 +223,7 @@ class ExternalPerplexityProbe(Probe):
                 "base_mean_logprob_per_tok": base_mean_per_tok,
                 "ft_mean_logprob_per_tok": ft_mean_per_tok,
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=message,
         )

@@ -225,5 +225,5 @@ class TestNullCalibrationEndToEnd:
             "external_perplexity should have z-scored against null baseline, "
             f"got evidence={ext_result.evidence}, message={ext_result.message}"
         )
-        # Sign-flipped z path puts "lower-is-better" wording in the message.
-        assert "lower-is-better" in (ext_result.message or "")
+        # Raw z-score path puts "higher-is-better" wording in the message.
+        assert "higher-is-better" in (ext_result.message or "")

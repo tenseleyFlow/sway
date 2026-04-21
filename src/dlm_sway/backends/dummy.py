@@ -167,17 +167,30 @@ class _NullView(_DummyView):
     perturbation is small (matches an ``init_scale=0.02`` adapter) so
     the null-vs-base divergence stays well below real-adapter territory
     in probe tests.
+
+    ``rank_scale`` simulates changing the effective LoRA rank: the
+    output variance of ``A·B`` scales linearly with rank, so the noise
+    std carries a ``sqrt(rank_scale)`` factor. Default 1.0 preserves
+    pre-S10 behavior exactly.
     """
 
-    def __init__(self, base_responses: DummyResponses, seed: int, init_scale: float) -> None:
+    def __init__(
+        self,
+        base_responses: DummyResponses,
+        seed: int,
+        init_scale: float,
+        rank_scale: float = 1.0,
+    ) -> None:
         super().__init__("base", base_responses)
         self._seed = seed
         self._init_scale = init_scale
+        self._rank_scale = rank_scale
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         base_dist = super().next_token_dist(prompt, top_k=top_k)
         rng = np.random.default_rng(self._seed + hash(prompt) % 1_000_003)
-        noise = rng.normal(0.0, self._init_scale, size=base_dist.logprobs.shape).astype(np.float32)
+        effective_scale = self._init_scale * math.sqrt(self._rank_scale)
+        noise = rng.normal(0.0, effective_scale, size=base_dist.logprobs.shape).astype(np.float32)
         new_lp = base_dist.logprobs + noise
         # Re-normalize (within the top-k slice) so a valid distribution comes back.
         max_lp = new_lp.max()
@@ -294,12 +307,22 @@ class DummyDifferentialBackend:
             self._exit()
 
     @contextmanager
-    def as_null_adapter(self, seed: int, *, init_scale: float = 0.02) -> Iterator[_DummyView]:
-        self._enter(f"null({seed})")
+    def as_null_adapter(
+        self,
+        seed: int,
+        *,
+        init_scale: float = 0.02,
+        rank_scale: float = 1.0,
+    ) -> Iterator[_DummyView]:
+        if rank_scale <= 0.0 or not math.isfinite(rank_scale):
+            raise ValueError(f"rank_scale must be positive and finite; got {rank_scale!r}")
+        label = f"null({seed})" if rank_scale == 1.0 else f"null({seed},rank={rank_scale:.2f})"
+        view_id = f"null_{seed}" if rank_scale == 1.0 else f"null_{seed}_rank{rank_scale:.2f}"
+        self._enter(label)
         try:
-            view = _NullView(self._base_r, seed=seed, init_scale=init_scale)
+            view = _NullView(self._base_r, seed=seed, init_scale=init_scale, rank_scale=rank_scale)
             view._inst = self._inst
-            view.id = f"null_{seed}"
+            view.id = view_id
             yield view
         finally:
             self._exit()
