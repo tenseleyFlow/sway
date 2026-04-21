@@ -28,9 +28,10 @@ from dlm_sway.probes._zscore import (
     score_from_z,
     verdict_from_z,
     z_score,
+    z_scores_by_rank,
 )
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
-from dlm_sway.probes.null_adapter import get_null_stats
+from dlm_sway.probes.null_adapter import get_null_stats, get_null_stats_by_rank
 
 
 class PreferenceTriple(BaseModel):
@@ -169,6 +170,9 @@ class PreferenceFlipProbe(Probe):
 
         stats = get_null_stats(ctx, spec.kind)
         z = z_score(flip_rate, stats)
+        z_by_rank = z_scores_by_rank(
+            flip_rate, get_null_stats_by_rank(ctx, spec.kind), sign=+1
+        )
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z
@@ -203,6 +207,7 @@ class PreferenceFlipProbe(Probe):
                 "dropped_triples": dropped_triples,
                 "dropped_reasons": dropped_reasons,
                 "weight": spec.weight,
+                "z_by_rank": z_by_rank,
             },
             message=message,
         )
