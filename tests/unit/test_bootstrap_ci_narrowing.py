@@ -76,9 +76,7 @@ def _run_delta_kl(n_prompts: int) -> tuple[float, float, float]:
     """
     backend = _VariableFtBackend(base=DummyResponses(), ft=DummyResponses())
     prompts = [f"prompt-{i:03d}" for i in range(n_prompts)]
-    probe, spec = build_probe(
-        {"name": f"dk_{n_prompts}", "kind": "delta_kl", "prompts": prompts}
-    )
+    probe, spec = build_probe({"name": f"dk_{n_prompts}", "kind": "delta_kl", "prompts": prompts})
     ctx = RunContext(backend=backend)
     result = probe.run(spec, ctx)
     assert result.raw is not None, "dummy backend delta_kl should produce a raw value"
@@ -98,7 +96,8 @@ def test_ci_width_shrinks_with_more_prompts() -> None:
 
     # Both raws are positive divergences, live in the same order of
     # magnitude, and bracket their own raw value.
-    assert raw_4 > 0 and raw_32 > 0
+    assert raw_4 > 0
+    assert raw_32 > 0
     assert lo_4 <= raw_4 <= hi_4
     assert lo_32 <= raw_32 <= hi_32
 
