@@ -29,20 +29,28 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      - name: Create venv
+        run: uv venv --python 3.11 .venv
+
+      # ``uv sync`` resolves every optional-dependency group to write a
+      # universal lockfile, which fails because ``[dlm]`` depends on
+      # the not-yet-published ``dlm`` package. ``uv pip install -e``
+      # only installs what's named — matches the README's documented
+      # install path and keeps CI honest about what users see.
       - name: Install dev deps (core only — no heavy extras)
-        run: uv sync --group dev
+        run: uv pip install -e "." --group dev
 
       - name: ruff check
-        run: uv run ruff check src tests
+        run: uv run --no-sync ruff check src tests
 
       - name: ruff format check
-        run: uv run ruff format --check src tests
+        run: uv run --no-sync ruff format --check src tests
 
       - name: mypy strict
-        run: uv run mypy src
+        run: uv run --no-sync mypy src
 
       - name: pytest (unit)
-        run: uv run pytest tests/unit --no-header -v
+        run: uv run --no-sync pytest tests/unit --no-header -v
 
   changes:
     # Decides whether the slow lane runs on this PR. A backend touch or
@@ -90,8 +98,11 @@ jobs:
       - name: Set up Python
         run: uv python install 3.11
 
+      - name: Create venv
+        run: uv venv --python 3.11 .venv
+
       - name: Install dev + hf extras
-        run: uv sync --group dev --extra hf
+        run: uv pip install -e ".[hf]" --group dev
 
       - name: pytest (slow + online)
-        run: uv run pytest tests/integration -m "slow or online" --no-header -v
+        run: uv run --no-sync pytest tests/integration -m "slow or online" --no-header -v
