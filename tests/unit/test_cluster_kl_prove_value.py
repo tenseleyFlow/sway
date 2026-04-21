@@ -57,12 +57,23 @@ def _stub_embedder(text_to_vec: dict[str, np.ndarray]):  # type: ignore[no-untyp
     return _encode
 
 
+def _argmax_kmeans(embeddings: np.ndarray, *, k: int, seed: int) -> np.ndarray:
+    """sklearn-free stub — cluster by argmax of the one-hot test embeddings."""
+    del seed
+    labels = np.argmax(embeddings, axis=1).astype(np.int64)
+    return labels % k
+
+
 @pytest.fixture
 def monkeyed_embed(monkeypatch: pytest.MonkeyPatch) -> dict[str, np.ndarray]:
     table: dict[str, np.ndarray] = {}
     monkeypatch.setattr(
         "dlm_sway.probes.cluster_kl._load_embedder",
         lambda _model_id: _stub_embedder(table),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        "dlm_sway.probes.cluster_kl._kmeans_cluster",
+        _argmax_kmeans,
     )
     return table
 
