@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Sprint 09 — External-perplexity-gap probe
+
+Closes Audit 01 innovation item F3. First innovation sprint landed on
+top of the audit-closure campaign (S01–S07).
+
+- **New probe `external_perplexity`** (`probes/external_perplexity.py`):
+  rolling-logprob delta of ft vs base on held-out public-domain English
+  prose. Raw metric is `mean_delta_nats` (per-token). Negative =
+  adapter raised perplexity on external text (diffuse forgetting);
+  positive = adapter improved English modeling incidentally. Category
+  `calibration`; scored alongside `calibration_drift`.
+- **Packaged public-domain corpus**
+  (`probes/_corpora/public_domain_en.txt`, ~14 KB): hand-assembled
+  from twelve US-public-domain passages (Lincoln, Emerson, Twain,
+  Thoreau, Austen, Darwin, Shakespeare, Franklin, Melville,
+  Dickinson, US Constitution, Federalist #10). Each passage carries
+  an inline `# -- source:` provenance comment identifying the work
+  and the "US public domain (pre-1929)" basis. Loader strips the
+  comments at read time so the probe sees only raw prose.
+- **Null calibration**: `calibrate_spec()` returns a 4-chunk cheap
+  version so `null_adapter` produces per-kind stats without dominating
+  suite runtime. Sign-flipped z-score — lower raw delta is worse, so
+  the shared `z >= assert_z_gte` semantics read as "σ better than
+  noise" on external fluency.
+- **`autogen` wiring**: emits an `external_ppl` suite entry (with
+  `corpus=public_domain_en`, `max_chunks=8`) whenever the source `.dlm`
+  has any PROSE section. Intent table explains it as the
+  "diffuse-forgetting complement to `calibration_drift`."
+- **Prove-the-value test**
+  (`tests/unit/test_ext_ppl_vs_calibration_drift.py`): a dummy backend
+  that applies a uniform −0.3 nats/token drift to every pack item and
+  every corpus chunk — below `calibration_drift`'s 1.0-nat per-item
+  regression threshold, above its −0.5 mean-delta gate, but well below
+  `external_perplexity`'s −0.1 fixed-threshold. `calibration_drift`
+  reports PASS, `external_perplexity` reports FAIL. The two probes
+  measure different failure modes and do not substitute for each
+  other.
+
 ### Sprint 07 — Performance & caching
 
 Closes Audit 01 findings B19 (deferred per design note),
