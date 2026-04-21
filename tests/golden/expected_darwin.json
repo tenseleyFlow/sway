@@ -1,0 +1,96 @@
+{
+  "determinism": {
+    "class": "best_effort",
+    "notes": [
+      "MPS: bit-identical across runs is best-effort"
+    ],
+    "seed": 0
+  },
+  "null_stats": {},
+  "probes": [
+    {
+      "base_value": null,
+      "ci_95": [
+        0.00845183397355073,
+        0.02976923823248102
+      ],
+      "evidence": {
+        "divergence_kind": "js",
+        "max": 0.036150663063872254,
+        "num_prompts": 4,
+        "per_prompt": [
+          0.01062496373830732,
+          0.006711906030413639,
+          0.013671617802962006,
+          0.036150663063872254
+        ],
+        "raw_ci_95": [
+          0.00845183397355073,
+          0.02976923823248102
+        ],
+        "weight": 1.0,
+        "z_by_rank": null
+      },
+      "ft_value": null,
+      "kind": "delta_kl",
+      "message": "mean js=0.0168 (\u2265 0.0) (no calibration for delta_kl)",
+      "name": "dk_golden",
+      "raw": 0.016789787658888805,
+      "score": 0.0242225433930576,
+      "verdict": "pass",
+      "z_score": null
+    },
+    {
+      "base_value": null,
+      "ci_95": [
+        0.0,
+        0.0
+      ],
+      "evidence": {
+        "fraction_regressed": 0.0,
+        "mean_delta_nats": -0.03518791794776917,
+        "raw_ci_95": [
+          0.0,
+          0.0
+        ],
+        "regressed_count": 0,
+        "regression_nats_threshold": 1.0,
+        "total_items": 20,
+        "weight": 1.0,
+        "worst_offenders": [],
+        "z_by_rank": null
+      },
+      "ft_value": -0.03518791794776917,
+      "kind": "calibration_drift",
+      "message": "0/20 items regressed >1.0 nats (frac=0.0%), mean_delta=-0.035 nats/tok (no calibration for calibration_drift)",
+      "name": "cal_golden",
+      "raw": 0.0,
+      "score": 0.8572832218805948,
+      "verdict": "pass",
+      "z_score": null
+    }
+  ],
+  "schema_version": 1,
+  "score": {
+    "band": "partial",
+    "components": {
+      "ablation": 0.0,
+      "adherence": 0.0242225433930576,
+      "attribution": 0.0,
+      "baseline": 0.0,
+      "calibration": 0.8572832218805948
+    },
+    "findings": [
+      "adherence score is 0.02 \u2014 below the noise threshold"
+    ],
+    "overall": 0.3574468147880725,
+    "weights": {
+      "ablation": 0.15,
+      "adherence": 0.3,
+      "attribution": 0.35,
+      "baseline": 0.0,
+      "calibration": 0.2
+    }
+  },
+  "spec_path": "<memory>"
+}

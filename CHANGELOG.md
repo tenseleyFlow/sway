@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Sprint 18 — Cross-platform determinism golden
+
+Closes Audit 01 stretch-list F-item "cross-platform determinism golden
+test." The README's "deterministic on CPU where possible" claim held
+in theory; now it's pinned by CI on two platforms.
+
+- **New module** `src/dlm_sway/core/golden.py`. Tolerance-aware JSON
+  comparator with `compare_goldens(actual, expected, *, logprob_tol=1e-6,
+  score_tol=1e-4)` and `mask_variable_fields` for stripping
+  timestamps, wall-seconds, `duration_s`, `backend_stats`,
+  `sway_version`, and cwd-resolved path identifiers (`adapter_id`,
+  `base_model_id`) before comparison. No torch dep; runs in the fast
+  lane.
+- **New integration test** `tests/integration/test_determinism_golden.py`
+  (slow + online). Builds a deterministically-seeded LoRA on
+  SmolLM2-135M, runs a minimal 2-probe suite (delta_kl +
+  calibration_drift), and diffs the JSON output against
+  `tests/golden/expected_<platform>.json`. `SWAY_UPDATE_GOLDENS=1`
+  toggles regen mode; missing golden → SKIP with a regen recipe.
+- **New CI matrix** `determinism-golden` with
+  `strategy.matrix.os: [ubuntu-latest, macos-latest]` in
+  `.github/workflows/ci.yml`. Triggered by changes under
+  `tests/golden/**`, `src/dlm_sway/core/golden.py`, or the test file
+  itself (plus the standard schedule/dispatch/push triggers).
+- **`workflow_dispatch` regen mode** — dispatching the CI workflow
+  with `regenerate_goldens=true` flips `SWAY_UPDATE_GOLDENS=1` on both
+  matrix legs and uploads the regenerated JSONs as per-platform
+  artifacts. Meant for deliberate "yes I changed the algorithm"
+  flows.
+- **Tolerance rationale** (documented in `core/golden.py`): `1e-6` for
+  logprob-like numeric fields sits above typical BLAS-implementation
+  drift (`1e-8`–`1e-7` band between OpenBLAS on linux and Accelerate
+  on darwin) but below real algorithm-change drift. `1e-4` for score
+  fields absorbs composition noise.
+- **25 new unit tests** for the comparator covering mask coverage,
+  tolerance thresholds, structural diffs (missing keys, length
+  mismatches, type mismatches), NaN/inf edge cases, and a realistic
+  two-masked-payloads round-trip.
+- **Pragmatic scope deviation**: the sprint envisioned a checked-in
+  5 MB adapter binary. Instead the test builds it from a fixed seed
+  at runtime (same pattern as `test_external_perplexity_e2e` and
+  `test_cluster_kl_e2e`). Avoids the regeneration chore noted in the
+  sprint's risks section.
+- **Linux golden bootstrap**: first PR ships `expected_darwin.json`
+  only; the linux leg SKIPs with a recipe pointing at the
+  `workflow_dispatch` regen mode. Maintainer dispatches, downloads
+  the artifact, commits `expected_linux.json`, and the next CI run
+  asserts cleanly on both platforms. One-time onboarding cost.
+
 ### Sprint 17 — Adversarial paraphrase mining + outlier-prompt miner
 
 Closes Audit 01 innovation item F11. Adds `sway mine` — an evaluation
