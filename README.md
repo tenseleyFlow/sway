@@ -148,6 +148,31 @@ proxy doesn't have one) surface `(no calibration)` in the report and
 fall back to fixed thresholds. Calibration stats are cached on disk
 under `~/.dlm-sway/null-stats/` keyed by backend identity.
 
+**The rank profile.** `null_adapter` takes an optional
+`rank_multipliers: list[float]` (default `[1.0]`). Pass
+`[0.5, 1.0, 2.0]` and every numeric probe carries a three-point
+z-score curve: `z=+4.2σ @ 1x / +6.8σ @ 0.5x / +2.1σ @ 2x`. The shape
+is diagnostic:
+
+- **Flat or slightly rising toward 0.5x** — adapter signal is
+  rank-stable, roughly independent of noise energy.
+- **Sharply higher at 0.5x, lower at 2x** — adapter is rank-saturated:
+  a smaller rank would have yielded a clearer separation from noise.
+  Consider halving `r`.
+- **Low everywhere** — adapter is barely above noise at any rank;
+  the signal is real but weak.
+
+Caveat: high z at low rank can also mean the low-rank null is
+*pathologically quiet* rather than that the adapter is strong. Read the
+profile as a shape, not a scalar — if all three z's move proportionally,
+the adapter is doing work; if they spread apart, the rank is mis-sized.
+
+Implementation note: rank scaling is mathematically equivalent to
+multiplying the null noise std by `sqrt(rank_scale)` (LoRA's A·B output
+variance scales linearly with rank). The shipped backends apply that
+scaling rather than reshaping PEFT tensors — no model reload, no
+rank-specific adapter cache, same `alpha/r` scaling throughout.
+
 **Determinism.** Every `sway run` calls `seed_everything(spec.defaults.seed)`
 before the first probe — seeds python/numpy/torch RNGs and asks torch
 for deterministic algorithms (`CUBLAS_WORKSPACE_CONFIG=:4096:8`). The
