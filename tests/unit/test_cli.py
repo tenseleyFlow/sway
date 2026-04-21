@@ -128,8 +128,31 @@ class TestListProbes:
             "leakage",
             "adapter_ablation",
             "null_adapter",
+            "external_perplexity",
+            "cluster_kl",
         ):
             assert kind in result.stdout
+
+    def test_every_probe_has_a_summary_line(self) -> None:
+        """F03 regression — before the module-docstring fallback, half
+        the probe rows shipped with an empty summary column."""
+        from dlm_sway.probes.base import registry
+
+        result = CliRunner().invoke(app, ["list-probes"])
+        assert result.exit_code == 0
+        out = result.stdout
+        for kind in sorted(registry()):
+            # Find the row by its leading ``kind`` token. Rich wraps
+            # long summaries across lines, so match any non-empty
+            # continuation after the category column.
+            idx = out.find(kind)
+            assert idx != -1, f"{kind} missing from list-probes output"
+            row = out[idx : out.find("\n", idx)]
+            # Row format: "kind  category  summary..."
+            tokens = row.split()
+            # Past the 2nd column (category) there should be at least one
+            # summary token. Empty rows surfaced as len(tokens) == 2.
+            assert len(tokens) > 2, f"{kind} has an empty summary: {row!r}"
 
 
 class TestReportFormatEnum:
