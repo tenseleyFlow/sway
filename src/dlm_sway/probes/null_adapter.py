@@ -74,6 +74,25 @@ class NullAdapterSpec(ProbeSpec):
     ``~/.dlm-sway/null-stats``. Keyed by backend identity + calibration
     params. Disable to force a fresh calibration (e.g. when you suspect
     the cached stats are stale)."""
+    rank_multipliers: list[float] = Field(default_factory=lambda: [1.0])
+    """Rank multipliers at which to calibrate. Each value scales the
+    null-adapter noise std by ``sqrt(multiplier)`` — mathematically
+    equivalent to rank-scaling the LoRA output variance. Default
+    ``[1.0]`` preserves pre-S10 single-rank behavior byte-for-byte.
+
+    Three-point profiles like ``[0.5, 1.0, 2.0]`` let users read
+    "how rank-saturated is my adapter?" off the report:
+
+    - A healthy adapter's z-score is stable across multipliers.
+    - An adapter that's barely above noise at its own rank but
+      solidly above noise at ``0.5x`` is rank-saturated — a smaller
+      rank would have yielded a sharper signal.
+
+    Per-rank stats land in ``evidence["null_stats_by_rank"]`` keyed
+    by ``f"rank_{mult:.2f}"``; the 1.0x group (when present) also
+    lands under ``evidence["null_stats"]`` for back-compat with
+    probes that consume a single calibration level.
+    """
 
 
 class NullAdapterProbe(Probe):
@@ -120,10 +139,24 @@ class NullAdapterProbe(Probe):
             filtered.append(k)
         target_kinds = filtered
 
+        # Validate rank multipliers up front; empty list is nonsensical.
+        rank_multipliers = list(spec.rank_multipliers) or [1.0]
+        for mult in rank_multipliers:
+            if mult <= 0.0 or not math.isfinite(mult):
+                return ProbeResult(
+                    name=spec.name,
+                    kind=spec.kind,
+                    verdict=Verdict.ERROR,
+                    score=None,
+                    message=f"rank_multipliers must be positive and finite; got {mult!r}",
+                )
+
         # Cache lookup: backends can opt in by providing a
         # ``cache_identity()`` method returning a stable string. The
         # key incorporates both that identity and the calibration
-        # parameters that actually influence the output.
+        # parameters that actually influence the output — including
+        # the sorted rank-multiplier tuple so multi-rank caches don't
+        # collide with single-rank.
         cache_key: str | None = None
         if spec.cache:
             backend_identity = _backend_identity(ctx.backend)
@@ -135,121 +168,93 @@ class NullAdapterProbe(Probe):
                     "seed_base": spec.seed_base,
                     "top_k": ctx.top_k,
                     "kinds": sorted(target_kinds),
+                    "rank_multipliers": sorted(rank_multipliers),
                 },
             )
             cached = load(cache_key)
+            if cached is not None and "null_stats_by_rank" in cached:
+                return _pass_from_cache(spec, cached)
+            # Pre-S10 cache entries only have ``null_stats`` (implicit
+            # single-rank). Promote them into the new shape so repeated
+            # runs benefit from the existing cache.
             if cached is not None and "null_stats" in cached:
-                cached_evidence: dict[str, Any] = dict(cached)
-                cached_evidence.setdefault("skipped_kinds", [])
-                cached_evidence.setdefault("calibrated_kinds", list(cached["null_stats"].keys()))
-                cached_evidence["weight"] = spec.weight
-                cached_evidence["from_cache"] = True
-                return safe_finalize(
-                    name=spec.name,
-                    kind=spec.kind,
-                    verdict=Verdict.PASS,
-                    score=1.0,
-                    evidence=cached_evidence,
-                    message=(
-                        f"null calibration: {len(cached['null_stats'])} kinds (loaded from cache)"
-                    ),
-                )
-
-        per_kind_stats: dict[str, dict[str, float]] = {}
-        per_kind_samples: dict[str, list[float]] = {}
-        skipped_kinds: list[dict[str, str]] = []
-
-        for kind in target_kinds:
-            probe_cls = registered[kind]
-            try:
-                cal_spec = probe_cls.calibrate_spec(ctx)
-            except Exception as exc:  # noqa: BLE001 — defensive
-                skipped_kinds.append({"kind": kind, "reason": f"calibrate_spec raised: {exc}"})
-                continue
-            if cal_spec is None:
-                skipped_kinds.append(
-                    {
-                        "kind": kind,
-                        "reason": "probe opted out (calibrate_spec returned None)",
-                    }
-                )
-                continue
-
-            probe = probe_cls()
-            raws: list[float] = []
-            errors: list[str] = []
-            for run_idx in range(spec.runs):
-                seed = spec.seed_base + run_idx
-                proxy = NullCalibrationBackendProxy(
-                    ctx.backend, seed=seed, init_scale=spec.init_scale
-                )
-                cal_ctx = RunContext(
-                    backend=proxy,
-                    seed=seed,
-                    top_k=ctx.top_k,
-                    sections=ctx.sections,
-                    doc_text=ctx.doc_text,
-                    null_stats={},  # calibration uses fixed thresholds — no recursion
-                    downstream_kinds=(),
-                )
-                try:
-                    cal_result = probe.run(cal_spec, cal_ctx)
-                except Exception as exc:  # noqa: BLE001
-                    errors.append(f"seed={seed}: {type(exc).__name__}: {exc}")
-                    continue
-                raw = cal_result.raw
-                if raw is not None and math.isfinite(raw):
-                    raws.append(float(raw))
-                elif cal_result.verdict == Verdict.ERROR:
-                    errors.append(f"seed={seed}: probe ERROR — {cal_result.message}")
-
-            if raws:
-                mean = statistics.fmean(raws)
-                std = statistics.pstdev(raws) if len(raws) > 1 else 0.0
-                per_kind_stats[kind] = {
-                    "mean": mean,
-                    # C9: clamp the std floor so the downstream z-score
-                    # path doesn't blow up when every seed produces
-                    # identical raws.
-                    "std": max(std, 1e-6),
-                    "n": float(len(raws)),
+                promoted = dict(cached)
+                promoted["null_stats_by_rank"] = {
+                    _rank_key(1.0): cached["null_stats"],
                 }
-                per_kind_samples[kind] = raws
-            else:
-                reason = "no finite raws across all seeds"
-                if errors:
-                    reason += f" ({errors[0]})"
-                skipped_kinds.append({"kind": kind, "reason": reason})
+                return _pass_from_cache(spec, promoted)
+
+        null_stats_by_rank: dict[str, dict[str, dict[str, float]]] = {}
+        per_rank_skipped: dict[str, list[dict[str, str]]] = {}
+        per_rank_samples: dict[str, dict[str, list[float]]] = {}
+
+        for mult in rank_multipliers:
+            rkey = _rank_key(mult)
+            per_kind_stats, samples, skipped = _calibrate_at_rank(
+                ctx=ctx,
+                spec=spec,
+                target_kinds=target_kinds,
+                registered=registered,
+                rank_scale=mult,
+            )
+            null_stats_by_rank[rkey] = per_kind_stats
+            per_rank_samples[rkey] = samples
+            per_rank_skipped[rkey] = skipped
+
+        # Back-compat surface: ``null_stats`` is the 1.0x group when
+        # present, else the first multiplier's stats (so older probes
+        # that only read the single-rank dict still get *something*).
+        primary_rkey = _rank_key(1.0)
+        if primary_rkey in null_stats_by_rank:
+            primary_stats = null_stats_by_rank[primary_rkey]
+            primary_skipped = per_rank_skipped[primary_rkey]
+            primary_samples = per_rank_samples[primary_rkey]
+        else:
+            first_rkey = _rank_key(rank_multipliers[0])
+            primary_stats = null_stats_by_rank[first_rkey]
+            primary_skipped = per_rank_skipped[first_rkey]
+            primary_samples = per_rank_samples[first_rkey]
 
         evidence: dict[str, Any] = {
-            "null_stats": per_kind_stats,
-            "per_kind_raw_samples": per_kind_samples,
-            "skipped_kinds": skipped_kinds,
-            "calibrated_kinds": list(per_kind_stats.keys()),
+            "null_stats": primary_stats,
+            "null_stats_by_rank": null_stats_by_rank,
+            "per_kind_raw_samples": primary_samples,
+            "skipped_kinds": primary_skipped,
+            "calibrated_kinds": list(primary_stats.keys()),
             "runs": spec.runs,
             "init_scale": spec.init_scale,
             "seed_base": spec.seed_base,
+            "rank_multipliers": rank_multipliers,
             "weight": spec.weight,
             "from_cache": False,
         }
 
         if cache_key is not None:
-            # Persist the stats dict only — the samples list can be
-            # large, and downstream consumers only need the aggregates.
             save(
                 cache_key,
                 {
-                    "null_stats": per_kind_stats,
+                    "null_stats": primary_stats,
+                    "null_stats_by_rank": null_stats_by_rank,
                     "runs": spec.runs,
                     "init_scale": spec.init_scale,
                     "seed_base": spec.seed_base,
-                    "calibrated_kinds": list(per_kind_stats.keys()),
+                    "rank_multipliers": rank_multipliers,
+                    "calibrated_kinds": list(primary_stats.keys()),
                 },
             )
 
-        message = f"null calibration: {len(per_kind_stats)} kinds calibrated over {spec.runs} seeds"
-        if skipped_kinds:
-            message += f" ({len(skipped_kinds)} opted out)"
+        if len(rank_multipliers) == 1:
+            message = (
+                f"null calibration: {len(primary_stats)} kinds calibrated over {spec.runs} seeds"
+            )
+        else:
+            mults_str = ", ".join(f"{m:g}x" for m in rank_multipliers)
+            message = (
+                f"null calibration: {len(primary_stats)} kinds × "
+                f"{len(rank_multipliers)} ranks [{mults_str}] over {spec.runs} seeds"
+            )
+        if primary_skipped:
+            message += f" ({len(primary_skipped)} opted out)"
 
         return safe_finalize(
             name=spec.name,
@@ -259,6 +264,123 @@ class NullAdapterProbe(Probe):
             evidence=evidence,
             message=message,
         )
+
+
+def _rank_key(mult: float) -> str:
+    """Canonical string key for a rank multiplier. Stable across runs."""
+    return f"rank_{mult:.2f}"
+
+
+def _calibrate_at_rank(
+    *,
+    ctx: RunContext,
+    spec: NullAdapterSpec,
+    target_kinds: list[str],
+    registered: dict[str, type[Probe]],
+    rank_scale: float,
+) -> tuple[dict[str, dict[str, float]], dict[str, list[float]], list[dict[str, str]]]:
+    """Run the full kind × seed calibration matrix at one rank multiplier.
+
+    Returns ``(per_kind_stats, per_kind_samples, skipped)``.
+    """
+    per_kind_stats: dict[str, dict[str, float]] = {}
+    per_kind_samples: dict[str, list[float]] = {}
+    skipped: list[dict[str, str]] = []
+
+    for kind in target_kinds:
+        probe_cls = registered[kind]
+        try:
+            cal_spec = probe_cls.calibrate_spec(ctx)
+        except Exception as exc:  # noqa: BLE001 — defensive
+            skipped.append({"kind": kind, "reason": f"calibrate_spec raised: {exc}"})
+            continue
+        if cal_spec is None:
+            skipped.append(
+                {"kind": kind, "reason": "probe opted out (calibrate_spec returned None)"}
+            )
+            continue
+
+        probe = probe_cls()
+        raws: list[float] = []
+        errors: list[str] = []
+        for run_idx in range(spec.runs):
+            seed = spec.seed_base + run_idx
+            proxy = NullCalibrationBackendProxy(
+                ctx.backend,  # type: ignore[arg-type]
+                seed=seed,
+                init_scale=spec.init_scale,
+                rank_scale=rank_scale,
+            )
+            cal_ctx = RunContext(
+                backend=proxy,
+                seed=seed,
+                top_k=ctx.top_k,
+                sections=ctx.sections,
+                doc_text=ctx.doc_text,
+                null_stats={},  # calibration uses fixed thresholds — no recursion
+                downstream_kinds=(),
+            )
+            try:
+                cal_result = probe.run(cal_spec, cal_ctx)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"seed={seed}: {type(exc).__name__}: {exc}")
+                continue
+            raw = cal_result.raw
+            if raw is not None and math.isfinite(raw):
+                raws.append(float(raw))
+            elif cal_result.verdict == Verdict.ERROR:
+                errors.append(f"seed={seed}: probe ERROR — {cal_result.message}")
+
+        if raws:
+            mean = statistics.fmean(raws)
+            std = statistics.pstdev(raws) if len(raws) > 1 else 0.0
+            per_kind_stats[kind] = {
+                "mean": mean,
+                # C9: clamp the std floor so the downstream z-score
+                # path doesn't blow up when every seed produces
+                # identical raws.
+                "std": max(std, 1e-6),
+                "n": float(len(raws)),
+            }
+            per_kind_samples[kind] = raws
+        else:
+            reason = "no finite raws across all seeds"
+            if errors:
+                reason += f" ({errors[0]})"
+            skipped.append({"kind": kind, "reason": reason})
+
+    return per_kind_stats, per_kind_samples, skipped
+
+
+def _pass_from_cache(spec: NullAdapterSpec, cached: dict[str, Any]) -> ProbeResult:
+    """Rebuild a PASS result from a cache-loaded evidence dict."""
+    stats_by_rank: dict[str, dict[str, dict[str, float]]] = dict(
+        cached.get("null_stats_by_rank") or {}
+    )
+    # Prefer the explicit 1.0x group; fall back to the legacy ``null_stats``.
+    primary_stats = stats_by_rank.get(_rank_key(1.0), cached.get("null_stats", {}))
+    evidence: dict[str, Any] = dict(cached)
+    evidence["null_stats"] = primary_stats
+    evidence["null_stats_by_rank"] = stats_by_rank
+    evidence.setdefault("skipped_kinds", [])
+    evidence.setdefault("calibrated_kinds", list(primary_stats.keys()))
+    evidence["weight"] = spec.weight
+    evidence["from_cache"] = True
+    n_kinds = len(primary_stats)
+    n_ranks = len(stats_by_rank)
+    message = (
+        f"null calibration: {n_kinds} kinds (loaded from cache)"
+        if n_ranks <= 1
+        else f"null calibration: {n_kinds} kinds × {n_ranks} ranks (loaded from cache)"
+    )
+    return safe_finalize(
+        name=spec.name,
+        kind=spec.kind,
+        verdict=Verdict.PASS,
+        score=1.0,
+        evidence=evidence,
+        message=message,
+    )
 
 
 def _backend_identity(backend: Any) -> str | None:
@@ -287,3 +409,23 @@ def get_null_stats(ctx: RunContext, probe_kind: str) -> Mapping[str, float] | No
     in the report.
     """
     return ctx.null_stats.get(probe_kind)
+
+
+def get_null_stats_by_rank(
+    ctx: RunContext, probe_kind: str
+) -> Mapping[str, Mapping[str, float]] | None:
+    """Look up per-rank null-adapter stats for ``probe_kind``.
+
+    Returns ``{rank_key: {"mean": …, "std": …, "n": …}}`` across every
+    rank multiplier the ``null_adapter`` probe calibrated. ``None`` when
+    no multi-rank calibration ran (pre-S10 behavior, or S02's single-
+    rank default).
+    """
+    by_rank = ctx.null_stats_by_rank
+    if not by_rank:
+        return None
+    out: dict[str, Mapping[str, float]] = {}
+    for rkey, kind_map in by_rank.items():
+        if probe_kind in kind_map:
+            out[rkey] = kind_map[probe_kind]
+    return out or None
