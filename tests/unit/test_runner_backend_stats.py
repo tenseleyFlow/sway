@@ -104,6 +104,74 @@ def test_trace_writer_produces_jsonl(tmp_path: Path) -> None:
     assert any(not line["hit"] for line in lines)
 
 
+def test_ci_95_survives_runner_roundtrip() -> None:
+    """F01 regression — ``_with_duration`` must forward every field.
+
+    The bug: ``_with_duration`` rebuilt the dataclass by hand and
+    silently dropped ``ci_95`` on its way out of the runner. Every
+    bootstrap CI was stripped before reaching the ``SuiteResult``.
+    """
+    # delta_kl only emits a bootstrap CI when it has ≥ 4 samples to
+    # resample — tailor a fixture that clears that floor.
+    base_dist = TokenDist(
+        token_ids=np.array([1, 2, 3], dtype=np.int64),
+        logprobs=np.log(np.array([0.7, 0.2, 0.1], dtype=np.float32)),
+        vocab_size=100,
+    )
+    ft_dists = {
+        "p1": TokenDist(
+            token_ids=np.array([1, 2, 3], dtype=np.int64),
+            logprobs=np.log(np.array([0.2, 0.4, 0.4], dtype=np.float32)),
+            vocab_size=100,
+        ),
+        "p2": TokenDist(
+            token_ids=np.array([1, 2, 3], dtype=np.int64),
+            logprobs=np.log(np.array([0.3, 0.3, 0.4], dtype=np.float32)),
+            vocab_size=100,
+        ),
+        "p3": TokenDist(
+            token_ids=np.array([1, 2, 3], dtype=np.int64),
+            logprobs=np.log(np.array([0.1, 0.5, 0.4], dtype=np.float32)),
+            vocab_size=100,
+        ),
+        "p4": TokenDist(
+            token_ids=np.array([1, 2, 3], dtype=np.int64),
+            logprobs=np.log(np.array([0.25, 0.35, 0.4], dtype=np.float32)),
+            vocab_size=100,
+        ),
+    }
+    backend = DummyDifferentialBackend(
+        base=DummyResponses(token_dists=dict.fromkeys(ft_dists, base_dist)),
+        ft=DummyResponses(token_dists=ft_dists),
+    )
+    spec = SwaySpec.model_validate(
+        {
+            "version": 1,
+            "models": {
+                "base": {"base": "b"},
+                "ft": {"base": "b", "adapter": "/tmp/a"},
+            },
+            "suite": [
+                {
+                    "name": "dk",
+                    "kind": "delta_kl",
+                    "prompts": list(ft_dists.keys()),
+                    "assert_mean_gte": 0.0,
+                }
+            ],
+        }
+    )
+    result = run_suite(spec, backend)
+    probe = result.probes[0]
+    assert probe.kind == "delta_kl"
+    assert probe.ci_95 is not None, (
+        "delta_kl emits a bootstrap CI at N=4; the runner dropped it. "
+        "Check suite/runner.py:_with_duration."
+    )
+    lo, hi = probe.ci_95
+    assert lo <= (probe.raw or 0.0) <= hi
+
+
 def test_report_footer_includes_cache_hit_rate() -> None:
     """Report surface shows the ``cache: N/M = X%`` line when stats exist."""
     from dlm_sway.suite import report
