@@ -42,6 +42,15 @@ class TwoModelDifferential:
     def __init__(self, base: DifferentialBackend, ft: DifferentialBackend) -> None:
         self._base = base
         self._ft = ft
+        # Compose the concurrency flag from both inner backends. The
+        # wrapper itself holds no shared mutable state — the toggle
+        # invariant :class:`DifferentialBackend` protects doesn't apply
+        # here — so the composed value is exactly as strong as the
+        # weaker of the two inner backends.
+        self.safe_for_concurrent_views: bool = bool(
+            getattr(self._base, "safe_for_concurrent_views", False)
+            and getattr(self._ft, "safe_for_concurrent_views", False)
+        )
 
     @contextmanager
     def as_base(self) -> Iterator[Any]:
