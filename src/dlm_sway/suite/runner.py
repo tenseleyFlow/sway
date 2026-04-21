@@ -265,7 +265,13 @@ def _snapshot_backend_stats(backend: DifferentialBackend) -> dict[str, float | i
 
 
 def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:
-    """Return a copy of ``result`` with :attr:`ProbeResult.duration_s` set."""
+    """Return a copy of ``result`` with :attr:`ProbeResult.duration_s` set.
+
+    Every ``ProbeResult`` field must be forwarded explicitly — a dropped
+    field here silently returns ``None`` for the whole runner path, which
+    is how F01 (bootstrap ``ci_95`` stripped from every probe) landed
+    before the audit caught it.
+    """
     return ProbeResult(
         name=result.name,
         kind=result.kind,
@@ -278,6 +284,7 @@ def _with_duration(result: ProbeResult, duration: float) -> ProbeResult:
         evidence=result.evidence,
         message=result.message,
         duration_s=duration,
+        ci_95=result.ci_95,
     )
 
 
