@@ -118,9 +118,7 @@ class PromptCollapseProbe(Probe):
         if half_life is not None:
             stats = get_null_stats(ctx, spec.kind)
             z = z_score(half_life, stats)
-            z_by_rank = z_scores_by_rank(
-                half_life, get_null_stats_by_rank(ctx, spec.kind), sign=+1
-            )
+            z_by_rank = z_scores_by_rank(half_life, get_null_stats_by_rank(ctx, spec.kind), sign=+1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z

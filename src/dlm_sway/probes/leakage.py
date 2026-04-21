@@ -168,9 +168,7 @@ class LeakageSusceptibilityProbe(Probe):
         stats = get_null_stats(ctx, spec.kind)
         raw_z = z_score(mean_clean, stats)
         z = -raw_z if raw_z is not None else None
-        z_by_rank = z_scores_by_rank(
-            mean_clean, get_null_stats_by_rank(ctx, spec.kind), sign=-1
-        )
+        z_by_rank = z_scores_by_rank(mean_clean, get_null_stats_by_rank(ctx, spec.kind), sign=-1)
         verdict_z = verdict_from_z(z, spec.assert_z_gte)
         if verdict_z is not None:
             verdict = verdict_z

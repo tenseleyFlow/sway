@@ -320,9 +320,7 @@ class DummyDifferentialBackend:
         view_id = f"null_{seed}" if rank_scale == 1.0 else f"null_{seed}_rank{rank_scale:.2f}"
         self._enter(label)
         try:
-            view = _NullView(
-                self._base_r, seed=seed, init_scale=init_scale, rank_scale=rank_scale
-            )
+            view = _NullView(self._base_r, seed=seed, init_scale=init_scale, rank_scale=rank_scale)
             view._inst = self._inst
             view.id = view_id
             yield view
