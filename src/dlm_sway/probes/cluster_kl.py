@@ -160,19 +160,30 @@ class ClusterKLProbe(Probe):
                 ),
             )
 
-        # Embed + cluster. Both need [semsim]; surface one hint if
-        # either fails.
+        # Embed + cluster. Both need [semsim]; surface one SKIP verdict
+        # with a pip hint if either extra is missing.
         try:
             embeddings = _embed_prompts(spec.prompts, spec.embedding_model)
             labels = _kmeans_cluster(embeddings, k=spec.num_clusters, seed=ctx.seed)
-        except BackendNotAvailableError:
-            raise  # already carries the install hint
+        except BackendNotAvailableError as exc:
+            return ProbeResult(
+                name=spec.name,
+                kind=spec.kind,
+                verdict=Verdict.SKIP,
+                score=None,
+                message=str(exc),
+            )
         except ImportError as exc:
-            raise BackendNotAvailableError(
-                "cluster_kl",
-                extra="semsim",
-                hint="cluster_kl needs sentence-transformers + scikit-learn.",
-            ) from exc
+            return ProbeResult(
+                name=spec.name,
+                kind=spec.kind,
+                verdict=Verdict.SKIP,
+                score=None,
+                message=(
+                    f"cluster_kl needs sentence-transformers + scikit-learn "
+                    f"(pip install 'dlm-sway[semsim]'): {exc}"
+                ),
+            )
 
         # Per-prompt divergences (same math as ``delta_kl``).
         top_k = spec.top_k if spec.top_k is not None else ctx.top_k
