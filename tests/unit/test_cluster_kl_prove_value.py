@@ -100,9 +100,7 @@ def _install_embeddings(table: dict[str, np.ndarray]) -> None:
 
 
 def _run_delta_kl(backend: DummyDifferentialBackend) -> float:
-    probe, spec = build_probe(
-        {"name": "dk", "kind": "delta_kl", "prompts": ALL_PROMPTS}
-    )
+    probe, spec = build_probe({"name": "dk", "kind": "delta_kl", "prompts": ALL_PROMPTS})
     result = probe.run(spec, RunContext(backend=backend))
     assert result.raw is not None
     return result.raw
