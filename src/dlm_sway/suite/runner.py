@@ -102,6 +102,7 @@ def run(
 
     results: list[ProbeResult] = []
     null_stats: dict[str, dict[str, float]] = {}
+    null_stats_by_rank: dict[str, dict[str, dict[str, float]]] = {}
 
     # Preflight gate: if the backend can self-check, do so before any
     # probe runs. A failing preflight aborts the suite.
@@ -165,6 +166,7 @@ def run(
             sections=ctx.sections,
             doc_text=ctx.doc_text,
             null_stats=ctx.null_stats,
+            null_stats_by_rank=ctx.null_stats_by_rank,
             downstream_kinds=downstream_kinds,
         )
 
@@ -199,6 +201,7 @@ def run(
         # Null-adapter result seeds ctx.null_stats for subsequent probes.
         if isinstance(probe_spec, NullAdapterSpec) and result.evidence.get("null_stats"):
             null_stats.update(result.evidence["null_stats"])
+            null_stats_by_rank.update(result.evidence.get("null_stats_by_rank") or {})
             # The dataclass is frozen, but the dict was previously
             # passed by reference — a probe could have mutated stats
             # other probes consume. Wrap in MappingProxyType so the
@@ -210,6 +213,7 @@ def run(
                 sections=ctx.sections,
                 doc_text=ctx.doc_text,
                 null_stats=MappingProxyType(null_stats),
+                null_stats_by_rank=MappingProxyType(null_stats_by_rank),
             )
 
     _set_backend_probe_label(backend, None)
