@@ -138,9 +138,11 @@ def _print_dry_run(spec_path: Path) -> None:
 
 def list_probes_cmd() -> None:
     """List every shipped probe kind with its category + one-line summary (D6)."""
-    # Make sure every probe module has been imported and registered.
+    import sys
+
     from rich.table import Table
 
+    # Make sure every probe module has been imported and registered.
     import dlm_sway.probes  # noqa: F401
     from dlm_sway.probes.base import registry
 
@@ -150,11 +152,27 @@ def list_probes_cmd() -> None:
     table.add_column("summary")
     for kind in sorted(registry()):
         cls = registry()[kind]
-        # First non-empty line of the docstring is the one-liner.
-        doc = (cls.__doc__ or "").strip()
-        summary = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        # Prefer the class-level docstring, then fall back to the
+        # defining module's module-level docstring. Most probe modules
+        # lead with a solid one-liner at the top; the class body often
+        # skips a docstring to avoid repeating it.
+        summary = _first_doc_line(cls.__doc__)
+        if not summary:
+            module = sys.modules.get(cls.__module__)
+            summary = _first_doc_line(getattr(module, "__doc__", None))
         table.add_row(kind, cls.category, summary)
     Console().print(table)
+
+
+def _first_doc_line(doc: str | None) -> str:
+    """Return the first non-empty line of ``doc``, stripped."""
+    if not doc:
+        return ""
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
 
 
 def gate_cmd(
