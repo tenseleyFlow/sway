@@ -102,8 +102,32 @@ def write_sway_yaml(dlm_path: Path, out: Path) -> None:
             f"{dlm_path}: no trained adapter found at ~/.dlm/store/{handle.dlm_id}/adapter; "
             "train the document with `dlm train` before generating a sway suite."
         )
-    spec = build_spec_dict(handle, dlm_source=str(dlm_path.resolve()))
+    spec = build_spec_dict(handle, dlm_source=_portable_dlm_source(dlm_path))
     out.write_text(_render_annotated_yaml(spec, handle, dlm_path), encoding="utf-8")
+
+
+def _portable_dlm_source(dlm_path: Path) -> str:
+    """Return a ``dlm_source`` string that survives cross-machine checkout.
+
+    F09 (Audit 03) — the pre-fix code unconditionally wrote an
+    absolute path (``/Users/mfwolffe/.../fortran.dlm``) which breaks
+    when the autogen'd ``sway.yaml`` is committed to a repo and
+    re-run from a different working tree (CI agents, another dev's
+    checkout). The cwd-relative form is round-trippable across
+    machines; only fall back to absolute when the ``.dlm`` lives
+    outside the cwd (e.g. a global user dir) where relativization
+    doesn't resolve on a fresh checkout.
+    """
+    abs_path = dlm_path.resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        # ``is_relative_to`` lands in 3.9+; this path is guaranteed
+        # to exist because sway requires ``>=3.11``.
+        if abs_path.is_relative_to(cwd):
+            return str(abs_path.relative_to(cwd))
+    except ValueError:
+        pass
+    return str(abs_path)
 
 
 def _render_annotated_yaml(spec: dict[str, Any], handle: DlmHandle, dlm_path: Path) -> str:
