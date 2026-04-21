@@ -19,6 +19,7 @@ Runtime contract:
 from __future__ import annotations
 
 import time
+from types import MappingProxyType
 
 from dlm_sway import __version__
 from dlm_sway.core.determinism import seed_everything
@@ -168,15 +169,17 @@ def run(
         # Null-adapter result seeds ctx.null_stats for subsequent probes.
         if isinstance(probe_spec, NullAdapterSpec) and result.evidence.get("null_stats"):
             null_stats.update(result.evidence["null_stats"])
-            # RunContext is frozen; swap in a fresh one so later probes
-            # see the populated stats.
+            # The dataclass is frozen, but the dict was previously
+            # passed by reference — a probe could have mutated stats
+            # other probes consume. Wrap in MappingProxyType so the
+            # contract matches the docstring (B21).
             ctx = RunContext(
                 backend=ctx.backend,
                 seed=ctx.seed,
                 top_k=ctx.top_k,
                 sections=ctx.sections,
                 doc_text=ctx.doc_text,
-                null_stats=null_stats,
+                null_stats=MappingProxyType(null_stats),
             )
 
     finished = utcnow()

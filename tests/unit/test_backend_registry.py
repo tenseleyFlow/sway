@@ -131,3 +131,69 @@ class TestRegistry:
         from dlm_sway.core.scoring import DifferentialBackend
 
         assert isinstance(backend, DifferentialBackend)
+
+
+class TestCustomProtocolStamp:
+    """B20: ``__sway_protocols__`` records the optional protocols satisfied."""
+
+    def test_stamps_null_calibrated_when_satisfied(self) -> None:
+        from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
+
+        class _AdapterBackend(DummyDifferentialBackend):
+            def __init__(self, base_spec, adapter_path):  # type: ignore[no-untyped-def]
+                super().__init__(base=DummyResponses(), ft=DummyResponses())
+
+        import sys
+        import types
+
+        mod = types.ModuleType("_sway_protostamp_mod")
+        mod.AdapterBackend = _AdapterBackend  # type: ignore[attr-defined]
+        sys.modules["_sway_protostamp_mod"] = mod
+
+        backend = build(
+            ModelSpec(
+                base="x",
+                kind="custom",
+                entry_point="_sway_protostamp_mod:AdapterBackend",
+                adapter=Path("/tmp/a"),
+            )
+        )
+        protocols = getattr(backend, "__sway_protocols__", ())
+        assert "DifferentialBackend" in protocols
+        # DummyDifferentialBackend satisfies both optional protocols.
+        assert "NullCalibratedBackend" in protocols
+        assert "ScalableDifferentialBackend" in protocols
+
+    def test_minimal_diff_backend_only_records_diff(self) -> None:
+        """A backend that only satisfies DifferentialBackend gets stamped accordingly."""
+        from contextlib import contextmanager
+
+        class _MinimalBackend:
+            def __init__(self, base_spec, adapter_path):  # type: ignore[no-untyped-def]
+                del base_spec, adapter_path
+
+            @contextmanager
+            def as_base(self):  # noqa: ANN201
+                yield self
+
+            @contextmanager
+            def as_finetuned(self):  # noqa: ANN201
+                yield self
+
+        import sys
+        import types
+
+        mod = types.ModuleType("_sway_minimal_mod")
+        mod.Minimal = _MinimalBackend  # type: ignore[attr-defined]
+        sys.modules["_sway_minimal_mod"] = mod
+
+        backend = build(
+            ModelSpec(
+                base="x",
+                kind="custom",
+                entry_point="_sway_minimal_mod:Minimal",
+                adapter=Path("/tmp/a"),
+            )
+        )
+        protocols = getattr(backend, "__sway_protocols__", ())
+        assert protocols == ("DifferentialBackend",)

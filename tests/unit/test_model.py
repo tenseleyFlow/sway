@@ -42,6 +42,24 @@ class TestModelSpec:
         spec = ModelSpec(base="x", adapter="/tmp/adapter")  # type: ignore[arg-type]
         assert isinstance(spec.adapter, Path)
 
+    def test_adapter_tilde_expanded(self) -> None:
+        """B22: ``~`` is expanded at spec-load time so backends see absolute paths."""
+        spec = ModelSpec(base="x", adapter="~/some/adapter")  # type: ignore[arg-type]
+        assert spec.adapter is not None
+        assert "~" not in str(spec.adapter)
+        assert spec.adapter.is_absolute()
+
+    def test_adapter_relative_resolved(self) -> None:
+        """B22: relative paths resolve against the current cwd."""
+        spec = ModelSpec(base="x", adapter="adapter/v1")  # type: ignore[arg-type]
+        assert spec.adapter is not None
+        assert spec.adapter.is_absolute()
+
+    def test_adapter_none_passthrough(self) -> None:
+        """B22 normalizer doesn't blow up on the default ``None``."""
+        spec = ModelSpec(base="x")
+        assert spec.adapter is None
+
 
 class TestLoadedModel:
     def test_frozen_dataclass(self) -> None:

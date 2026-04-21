@@ -346,11 +346,17 @@ def _execute_spec(
     """
     from dlm_sway.backends import build as build_backend
     from dlm_sway.backends import build_two_separate
+    from dlm_sway.probes.base import validate_all_probes
     from dlm_sway.suite.loader import load_spec
     from dlm_sway.suite.runner import run as run_suite
     from dlm_sway.suite.score import compute as compute_score
 
     spec = load_spec(path)
+    # B7: validate every probe entry before paying the cost of loading
+    # a backend. A user with a typo in `kind:` shouldn't wait minutes
+    # for the model to download just to learn they spelled the probe
+    # name wrong.
+    validate_all_probes(spec.suite)
     sections = None
     doc_text = None
     if spec.dlm_source is not None:

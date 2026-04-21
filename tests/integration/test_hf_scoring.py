@@ -166,7 +166,9 @@ class TestNextTokenDist:
         # Top-k must arrive in descending probability order.
         assert np.all(np.diff(d.logprobs) <= 1e-7)
         assert d.vocab_size > 64
-        assert math.isfinite(d.tail_logprob) or d.tail_logprob == 0.0
+        # B6: tail_logprob is None (k covers vocab — won't happen here),
+        # 0.0 (underflow), or a finite negative log-prob.
+        assert d.tail_logprob is None or math.isfinite(d.tail_logprob)
 
     def test_dist_changes_under_adapter(self, hf_backend: HuggingFaceDifferentialBackend) -> None:
         prompt = "the adapter influences"

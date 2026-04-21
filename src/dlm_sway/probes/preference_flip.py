@@ -89,17 +89,49 @@ class PreferenceFlipProbe(Probe):
                 message="no preference triples (inline or from sections)",
             )
 
+        from dlm_sway.core.errors import ProbeError
+
         base_margins: list[float] = []
         ft_margins: list[float] = []
+        dropped_triples = 0
+        dropped_reasons: list[str] = []
         for t in triples:
-            with ctx.backend.as_base() as b:
-                base_margins.append(
-                    b.logprob_of(t.prompt, t.chosen) - b.logprob_of(t.prompt, t.rejected)
-                )
-            with ctx.backend.as_finetuned() as f:
-                ft_margins.append(
-                    f.logprob_of(t.prompt, t.chosen) - f.logprob_of(t.prompt, t.rejected)
-                )
+            # B14: a single bad triple (zero-token chosen / rejected,
+            # tokenizer hiccup, OOM on one prompt) used to take the whole
+            # batch down. Fence per triple so probes degrade gracefully:
+            # drop the offending triple, count it, surface in evidence.
+            try:
+                with ctx.backend.as_base() as b:
+                    base_margin = b.logprob_of(t.prompt, t.chosen) - b.logprob_of(
+                        t.prompt, t.rejected
+                    )
+                with ctx.backend.as_finetuned() as f:
+                    ft_margin = f.logprob_of(t.prompt, t.chosen) - f.logprob_of(
+                        t.prompt, t.rejected
+                    )
+            except ProbeError as exc:
+                dropped_triples += 1
+                if len(dropped_reasons) < 5:  # cap evidence verbosity
+                    dropped_reasons.append(f"{t.prompt[:40]!r}: {exc}")
+                continue
+            base_margins.append(base_margin)
+            ft_margins.append(ft_margin)
+
+        if not base_margins:
+            return ProbeResult(
+                name=spec.name,
+                kind=spec.kind,
+                verdict=Verdict.ERROR,
+                score=None,
+                evidence={
+                    "dropped_triples": dropped_triples,
+                    "dropped_reasons": dropped_reasons,
+                    "weight": spec.weight,
+                },
+                message=(
+                    f"every triple raised ProbeError ({dropped_triples} total); no usable margins"
+                ),
+            )
 
         # Interesting denominator: base got it wrong.
         base_wrong_idx = [i for i, m in enumerate(base_margins) if m < 0]
@@ -123,6 +155,8 @@ class PreferenceFlipProbe(Probe):
                     "base_wrong": len(base_wrong_idx),
                     "total": len(triples),
                     "mean_margin_delta": mean_delta,
+                    "dropped_triples": dropped_triples,
+                    "dropped_reasons": dropped_reasons,
                     "weight": spec.weight,
                 },
                 message=(
@@ -166,6 +200,8 @@ class PreferenceFlipProbe(Probe):
                 "flipped": len(flipped_idx),
                 "base_wrong": len(base_wrong_idx),
                 "total": len(triples),
+                "dropped_triples": dropped_triples,
+                "dropped_reasons": dropped_reasons,
                 "weight": spec.weight,
             },
             message=message,

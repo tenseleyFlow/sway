@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+### Sprint 05 — Probe quality & edge cases
+
+Closes Audit 01 findings B6, B7, B8, B9, B10, B11, B12, B13, B14, B20,
+B21, B22.
+
+- **B6 — `tail_logprob` semantics:** the field is now `float | None`
+  with three discrete states: `None` (top-k covered the full vocab — no
+  tail to redistribute), `0.0` (a real tail underflowed below fp32),
+  and a measurable negative log-prob. HF, MLX, and dummy backends all
+  emit `None` when `k == vocab`. Preflight check guards against
+  non-finite `tail_logprob` only when it's a number.
+- **B7 — probe validation before backend build:** new
+  `validate_all_probes(suite)` helper collects every spec error in one
+  pass; `_execute_spec` calls it *before* materializing the backend so
+  a typo in `kind:` surfaces immediately, and *all* typos surface in a
+  single error message.
+- **B8 — `autogen` style prompts:** `style_fingerprint` no longer
+  receives the leading sentence of a prose section (which elicited doc
+  *content*, not stylistic voice). Replaced with a fixed
+  `_STYLE_ELICITATION_PROMPTS` set of 6 open-ended, content-neutral
+  prompts.
+- **B9 — sentence-transformer caching:** `_load_embedder` is now
+  `functools.lru_cache(maxsize=4)`. Suites that run `adapter_revert`
+  back-to-back (multi-adapter diff, repeated probes) reuse the same
+  ~80 MB embedder instead of re-loading every probe call.
+- **B10 — `_lcs_ratio` docstring rot:** the function name is a
+  historical misnomer (it's gestalt similarity via
+  `difflib.SequenceMatcher`, not LCS). Docstring rewritten to make the
+  contract explicit; rename deferred to v0.2 to preserve the public
+  API surface.
+- **B11 — leakage adversarial perturbations:** added 4 new perturbations
+  (`synonym_swap` with a hand-curated 50-pair table, `clause_reverse`,
+  `prefix_inject`, `register_shift`) alongside the original three.
+  Default perturbation list is now all 7; the spec accepts any subset.
+- **B12 — calibration pack expansion:** `BUILT_IN_PACK` grew from 30
+  to **200** items (geography, natural sciences, arithmetic, language,
+  history, biology, technology, miscellaneous). All public-domain /
+  hand-composed grade-school facts — no third-party dataset license
+  attaches. `items_limit` docstring documents the new resolution
+  (~0.5 pp per regressed item vs the old ~3.3 pp).
+- **B13 — tokenizer-aware `_stuffing`:** `prompt_collapse` now derives
+  its padding from the model's pad / unk / EOS token via the backend's
+  tokenizer, making the metric language-agnostic. The pre-B13 hardcoded
+  English string remains as the dummy-backend fallback and behind a
+  `legacy_stuffing: bool = False` spec field for one-release
+  backward-compat.
+- **B14 — `preference_flip` per-triple error fence:** wrapped each
+  triple's `logprob_of` calls in `try/except ProbeError`. A single bad
+  triple no longer kills the whole batch; `evidence["dropped_triples"]`
+  + `dropped_reasons` surface the count + first 5 reasons. When *every*
+  triple raises, the probe routes to ERROR with a clear explanation.
+- **B20 — custom backend protocol checks:** `_load_custom` now
+  isinstance-checks `NullCalibratedBackend` and
+  `ScalableDifferentialBackend` after the `DifferentialBackend` check.
+  The set of satisfied protocols is stamped onto the instance as
+  `__sway_protocols__: tuple[str, ...]` so the report can show which
+  features are available without re-checking.
+- **B21 — `RunContext.null_stats` truly frozen:** the runner now wraps
+  the stats dict in `types.MappingProxyType` before threading it
+  through. The dataclass was already `frozen=True` but the dict was
+  mutable by reference; B21 makes the docstring's "frozen" claim
+  literally true. Field type widened from `dict[str, dict[str, float]]`
+  to `Mapping[str, Mapping[str, float]]`.
+- **B22 — `ModelSpec.adapter` path normalization:** added a pydantic
+  `field_validator` that runs `Path.expanduser().resolve()` on the
+  field at spec-load time. Backends no longer re-do the work; the cache
+  key in `_null_cache.compute_key` is now stable regardless of how the
+  user spelled the path in YAML or on the CLI.
+
 ### Sprint 04 — Integration & regression testing
 
 Closes Audit 01 findings C1, C2, C5, C6, C7, C8, C10, C11, C12, B3

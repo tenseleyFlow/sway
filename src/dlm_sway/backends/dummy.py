@@ -109,11 +109,15 @@ class _DummyView:
         else:
             # More uniform mass across the top-k tokens.
             lp = np.full(k, -math.log(k), dtype=np.float32)
+        # B6: tail_logprob=None means "no measurable tail" (k covers vocab
+        # or residual underflowed); reserve floats for measurable mass.
+        residual = 1.0 - float(np.exp(lp).sum())
+        tail_lp = math.log(residual) if residual > 1e-12 else None
         return TokenDist(
             token_ids=np.arange(k, dtype=np.int64),
             logprobs=lp,
             vocab_size=vocab,
-            tail_logprob=math.log1p(-float(np.exp(lp).sum())) if np.exp(lp).sum() < 1 else 0.0,
+            tail_logprob=tail_lp,
         )
 
 

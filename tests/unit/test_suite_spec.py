@@ -82,4 +82,7 @@ class TestLoader:
         path = tmp_path / "sway.yaml"
         path.write_text(yaml.safe_dump(_minimum_valid()), encoding="utf-8")
         spec = load_spec(path)
-        assert spec.models.ft.adapter == Path("/tmp/adapter")
+        # B22: ModelSpec.adapter is normalized via Path.resolve(), so
+        # symlinked roots (/tmp → /private/tmp on macOS) get followed.
+        # Compare against the resolved form so the test isn't host-dependent.
+        assert spec.models.ft.adapter == Path("/tmp/adapter").resolve()

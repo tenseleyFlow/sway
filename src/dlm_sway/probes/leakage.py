@@ -31,11 +31,30 @@ from dlm_sway.probes._zscore import (
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 from dlm_sway.probes.null_adapter import get_null_stats
 
-PerturbationKind = Literal["typo", "case_flip", "drop_punct"]
+PerturbationKind = Literal[
+    "typo",
+    "case_flip",
+    "drop_punct",
+    "synonym_swap",
+    "clause_reverse",
+    "prefix_inject",
+    "register_shift",
+]
 
 
 def _default_perturbations() -> list[PerturbationKind]:
-    return ["typo", "case_flip", "drop_punct"]
+    """Seven perturbations by default — the original three plus the four
+    introduced for B11 to widen the adversarial surface beyond trivial
+    character-level edits."""
+    return [
+        "typo",
+        "case_flip",
+        "drop_punct",
+        "synonym_swap",
+        "clause_reverse",
+        "prefix_inject",
+        "register_shift",
+    ]
 
 
 class LeakageSusceptibilitySpec(ProbeSpec):
@@ -196,15 +215,79 @@ class LeakageSusceptibilityProbe(Probe):
 
 
 def _lcs_ratio(generated: str, target: str) -> float:
-    """Longest common subsequence ratio via difflib.
+    """Ratcliff-Obershelp gestalt similarity via ``difflib.SequenceMatcher.ratio()``.
 
-    Returns 0 for empty inputs, 1.0 for identical strings. difflib's
-    ``ratio`` is a gestalt similarity; close enough to a true LCS for
-    our purposes and has no external deps.
+    The function name is a historical misnomer — this is *not* longest
+    common subsequence. Gestalt similarity finds the longest matching
+    contiguous substring, then recurses on the unmatched bookends; it
+    overweights long verbatim runs in a way that closely tracks LCS for
+    leakage-detection purposes (verbatim recital is the failure mode we
+    actually care about), and ships in the stdlib with no external dep.
+
+    Returns 0 for empty inputs, 1.0 for identical strings. Renaming the
+    function would be a breaking change for any external consumer —
+    deferred until a v0.2 cleanup pass.
     """
     if not generated or not target:
         return 0.0
     return difflib.SequenceMatcher(None, generated, target).ratio()
+
+
+#: Hand-curated synonym pairs for ``synonym_swap`` (B11). Picked for
+#: high-frequency content words that commonly anchor leading sentences;
+#: deliberately small + deterministic so we don't carry a WordNet dep.
+_SYNONYM_PAIRS: dict[str, str] = {
+    "important": "significant",
+    "interesting": "notable",
+    "good": "fine",
+    "great": "excellent",
+    "small": "tiny",
+    "large": "big",
+    "fast": "quick",
+    "slow": "sluggish",
+    "begin": "start",
+    "end": "finish",
+    "show": "demonstrate",
+    "use": "employ",
+    "make": "create",
+    "help": "assist",
+    "find": "discover",
+    "many": "numerous",
+    "few": "several",
+    "old": "ancient",
+    "new": "recent",
+    "true": "valid",
+    "false": "incorrect",
+    "easy": "simple",
+    "hard": "difficult",
+    "strong": "robust",
+    "weak": "fragile",
+    "fact": "truth",
+    "idea": "concept",
+    "result": "outcome",
+    "method": "approach",
+    "system": "framework",
+    "common": "ordinary",
+    "rare": "uncommon",
+    "thing": "object",
+    "person": "individual",
+    "place": "location",
+    "time": "moment",
+    "way": "manner",
+    "work": "labor",
+    "study": "examine",
+    "know": "understand",
+    "think": "consider",
+    "say": "state",
+    "tell": "inform",
+    "ask": "inquire",
+    "give": "provide",
+    "take": "obtain",
+    "see": "observe",
+    "look": "view",
+    "feel": "sense",
+    "want": "desire",
+}
 
 
 def _perturb(text: str, kind: str) -> str:
@@ -225,6 +308,40 @@ def _perturb(text: str, kind: str) -> str:
         return text
     if kind == "drop_punct":
         return "".join(ch for ch in text if ch not in ".,;:!?-—")
+    if kind == "synonym_swap":
+        # Replace the *first table-matching* word in the text. ``re.subn``
+        # with ``count=1`` would replace the first regex match regardless,
+        # so we walk matches and stop at the first one in the table —
+        # otherwise text starting with "The" or "This" would never get
+        # perturbed.
+        import re as _re
+
+        for match in _re.finditer(r"\b[A-Za-z]+\b", text):
+            word = match.group(0)
+            replacement = _SYNONYM_PAIRS.get(word.lower())
+            if replacement is None:
+                continue
+            if word[0].isupper():
+                replacement = replacement.capitalize()
+            return text[: match.start()] + replacement + text[match.end() :]
+        return text
+    if kind == "clause_reverse":
+        # Split on the first comma or " and "; swap the two halves.
+        for sep in (", ", " and ", " but ", " or "):
+            idx = text.find(sep)
+            if idx > 0:
+                left, right = text[:idx], text[idx + len(sep) :]
+                return f"{right.rstrip('.!?')}{sep}{left}"
+        return text
+    if kind == "prefix_inject":
+        # Prepend a neutral lead-in. The doc text doesn't begin with
+        # "I think that" so a memorizing model is forced to reconcile.
+        return "I think that " + text[0].lower() + text[1:] if text else text
+    if kind == "register_shift":
+        # Lower-case the first 30 chars (or upper-case if already lower).
+        head, tail = text[:30], text[30:]
+        shifted = head.lower() if any(ch.isupper() for ch in head) else head.upper()
+        return shifted + tail
     raise ValueError(f"unknown perturbation: {kind!r}")
 
 

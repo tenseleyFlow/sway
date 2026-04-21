@@ -16,6 +16,7 @@ as the source so error messages localize to the offending entry.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -65,7 +66,10 @@ class RunContext:
     null_stats:
         Null-adapter baseline stats for z-score calibration, keyed by
         probe *kind*. Populated by the runner after it's executed the
-        ``null_adapter`` probe (if configured).
+        ``null_adapter`` probe (if configured). Typed as a read-only
+        :class:`~collections.abc.Mapping` and constructed from a
+        ``MappingProxyType`` so probes can't accidentally mutate the
+        stats other probes will consume.
     downstream_kinds:
         Tuple of probe kinds that appear *after* the current probe in
         the suite. Populated by the runner before each probe runs;
@@ -78,7 +82,7 @@ class RunContext:
     top_k: int = 256
     sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
-    null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
+    null_stats: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -177,3 +181,23 @@ def build_probe(raw: dict[str, Any]) -> tuple[Probe, ProbeSpec]:
     except ValidationError as exc:
         raise SpecValidationError(str(exc), source=str(raw.get("name", "<unknown>"))) from exc
     return probe_cls(), spec
+
+
+def validate_all_probes(suite: list[dict[str, Any]]) -> None:
+    """Run :func:`build_probe` against every entry; collect all errors.
+
+    The runner / CLI calls this before constructing the backend (which
+    is the slow, network-touching step). A typo in any ``kind:`` field
+    therefore surfaces before any model is loaded — and *every* typo
+    in the spec surfaces in a single error message instead of
+    forcing the user to fix one, re-run, fix the next, re-run (B7).
+    """
+    errors: list[str] = []
+    for idx, raw in enumerate(suite):
+        try:
+            build_probe(raw)
+        except SpecValidationError as exc:
+            label = raw.get("name") or f"entry #{idx}"
+            errors.append(f"  - {label}: {exc}")
+    if errors:
+        raise SpecValidationError("spec contains invalid probe entries:\n" + "\n".join(errors))

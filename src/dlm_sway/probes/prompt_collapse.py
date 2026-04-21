@@ -15,7 +15,7 @@ All math is numpy-only to avoid a scipy dependency on the install path.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import Field
@@ -58,6 +58,11 @@ class PromptCollapseSpec(ProbeSpec):
     assert_z_gte: float = 3.0
     """Z-score pass criterion against the null-adapter baseline, when it
     exists. Preferred over the raw threshold."""
+    legacy_stuffing: bool = False
+    """If ``True``, use the pre-B13 hardcoded English stuffing string.
+    The default tokenizer-aware path produces tokenizer-derived padding
+    that's language-agnostic. Slated for removal in v0.2 — set this
+    only as a temporary backward-compat escape hatch."""
 
 
 class PromptCollapseProbe(Probe):
@@ -83,10 +88,14 @@ class PromptCollapseProbe(Probe):
             )
 
         top_k = spec.top_k if spec.top_k is not None else ctx.top_k
+        # B13: prefer tokenizer-derived padding over hardcoded English.
+        # Falls back to the legacy English string when the backend
+        # doesn't expose a tokenizer (or the user opts in via spec).
+        backend_tokenizer = None if spec.legacy_stuffing else _peek_backend_tokenizer(ctx)
         # Mean divergence at each context length.
         mean_divs: list[float] = []
         for ctx_len in spec.context_lengths:
-            prefix = _stuffing(ctx_len)
+            prefix = _stuffing(ctx_len, tokenizer=backend_tokenizer)
             divs: list[float] = []
             for prompt in spec.prompts:
                 full_prompt = prefix + prompt
@@ -142,15 +151,78 @@ class PromptCollapseProbe(Probe):
         )
 
 
-def _stuffing(target_tokens: int) -> str:
-    """Approximate target-length stuffing. 4 chars ≈ 1 token is fine
-    for SentencePiece-style tokenizers at the order-of-magnitude level."""
+def _stuffing(target_tokens: int, *, tokenizer: Any | None = None) -> str:
+    """Build a string of approximately ``target_tokens`` neutral tokens.
+
+    Two paths (B13):
+
+    - **Tokenizer-derived** (when ``tokenizer`` is supplied): repeat
+      the model's pad / unk / EOS token (whichever exists) until the
+      character-decoded result tokenizes to at least ``target_tokens``.
+      Language-agnostic — the resulting prefix carries no information
+      content beyond its length, which is exactly what
+      ``prompt_collapse`` wants to measure.
+    - **Legacy / English** (when ``tokenizer`` is ``None``): the
+      pre-B13 hardcoded English padding. Kept for the
+      ``legacy_stuffing=True`` opt-out and for callers (the dummy
+      backend in tests) that don't expose a tokenizer.
+    """
     if target_tokens <= 0:
         return ""
+
+    if tokenizer is not None:
+        try:
+            return _tokenizer_stuffing(target_tokens, tokenizer)
+        except Exception:  # noqa: BLE001 — tokenizer impls vary; fall back loud-but-safe
+            pass
+
     # Repeat enough copies to hit the target length in characters.
     target_chars = target_tokens * 4
     reps = (target_chars // len(_STUFFING)) + 1
     return (_STUFFING * reps)[:target_chars] + "\n\n"
+
+
+def _tokenizer_stuffing(target_tokens: int, tokenizer: Any) -> str:
+    """Emit ``target_tokens`` worth of the tokenizer's pad/unk token."""
+    pad_token = (
+        getattr(tokenizer, "pad_token", None)
+        or getattr(tokenizer, "unk_token", None)
+        or getattr(tokenizer, "eos_token", None)
+        or " "
+    )
+    if not isinstance(pad_token, str) or not pad_token.strip():
+        pad_token = " "
+    # 1 pad token per repeat is the obvious lower bound; multiply by 2
+    # so we hit the target even when the tokenizer collapses repeats.
+    raw = pad_token * (target_tokens * 2 + 4)
+    # Trim by re-tokenizing and taking exactly target_tokens.
+    try:
+        ids = tokenizer.encode(raw)
+    except Exception:  # noqa: BLE001
+        return raw[: target_tokens * 4] + "\n\n"
+    if len(ids) <= target_tokens:
+        return raw + "\n\n"
+    trimmed_ids = ids[:target_tokens]
+    decoded = tokenizer.decode(trimmed_ids, skip_special_tokens=False)
+    return str(decoded) + "\n\n"
+
+
+def _peek_backend_tokenizer(ctx: RunContext) -> Any | None:
+    """Try to fish a tokenizer out of the backend.
+
+    The HF backend stores it as ``_tokenizer``; the MLX backend the
+    same. The dummy backend doesn't have one. We do this with
+    ``getattr`` rather than a protocol because exposing the tokenizer
+    in the public scoring contract would broaden it for one probe;
+    instead we accept that ``prompt_collapse`` knows where to look.
+    """
+    backend = ctx.backend
+    inner = getattr(backend, "_ft_view", None)
+    if inner is not None:
+        tok = getattr(inner, "_tokenizer", None)
+        if tok is not None:
+            return tok
+    return getattr(backend, "_tokenizer", None)
 
 
 def _fit_half_life(lengths: np.ndarray, divergences: np.ndarray) -> float | None:

@@ -8,6 +8,7 @@ downstream probes pick up end-to-end; missing-capability SKIP path.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
 from dlm_sway.core.result import Verdict
@@ -172,6 +173,49 @@ class TestProbe:
             "delta_kl should have z-scored against null baseline, got "
             f"evidence={dk_result.evidence}, message={dk_result.message}"
         )
+
+    def test_runner_threaded_null_stats_are_immutable(self) -> None:
+        """B21: a probe shouldn't be able to mutate the stats other probes consume."""
+        from types import MappingProxyType
+
+        backend = _diverging_backend()
+        raw_spec = SwaySpec.model_validate(
+            {
+                "version": 1,
+                "models": {"base": {"base": "b"}, "ft": {"base": "b", "adapter": "/tmp/a"}},
+                "suite": [
+                    {"name": "null", "kind": "null_adapter", "runs": 2},
+                    {
+                        "name": "dk",
+                        "kind": "delta_kl",
+                        "prompts": ["q1"],
+                        "assert_z_gte": -100.0,
+                    },
+                ],
+            }
+        )
+        from dlm_sway.probes import delta_kl as dk_mod
+
+        captured: dict[str, object] = {}
+        original_run = dk_mod.DeltaKLProbe.run
+
+        def _capturing_run(self, spec, ctx):
+            captured["null_stats"] = ctx.null_stats
+            return original_run(self, spec, ctx)
+
+        mp = pytest.MonkeyPatch()
+        mp.setattr(dk_mod.DeltaKLProbe, "run", _capturing_run)
+        try:
+            run_suite(raw_spec, backend)
+        finally:
+            mp.undo()
+
+        stats = captured["null_stats"]
+        assert isinstance(stats, MappingProxyType), (
+            f"expected MappingProxyType, got {type(stats).__name__}"
+        )
+        with pytest.raises(TypeError):
+            stats["bogus"] = {"mean": 0.0, "std": 1.0, "n": 1.0}  # type: ignore[index]
 
     def test_cache_hit_short_circuits_calibration(self, tmp_path, monkeypatch) -> None:
         """A cached stats blob is loaded without re-running any probes."""

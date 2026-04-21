@@ -127,17 +127,23 @@ class _MLXView:
         logits = self._forward_logits(prompt)
         last_logits = logits[-1].astype(np.float64)
         log_probs = _log_softmax(last_logits, axis=-1)
-        k = min(top_k, log_probs.shape[0])
+        vocab = int(log_probs.shape[0])
+        k = min(top_k, vocab)
         # np.argpartition for top-k then sort the partition.
         part = np.argpartition(log_probs, -k)[-k:]
         top_ids = part[np.argsort(log_probs[part])[::-1]]
         top_lp = log_probs[top_ids]
-        tail_mass = float(1.0 - np.exp(top_lp).sum())
-        tail_logprob = float(np.log(max(tail_mass, 1e-12))) if tail_mass > 1e-12 else 0.0
+        # B6: see TokenDist.tail_logprob — None means k covers vocab,
+        # 0.0 means measurable tail underflowed to zero.
+        if k == vocab:
+            tail_logprob: float | None = None
+        else:
+            tail_mass = float(1.0 - np.exp(top_lp).sum())
+            tail_logprob = float(np.log(tail_mass)) if tail_mass > 1e-12 else 0.0
         return TokenDist(
             token_ids=top_ids.astype(np.int64),
             logprobs=top_lp.astype(np.float32),
-            vocab_size=int(log_probs.shape[0]),
+            vocab_size=vocab,
             tail_logprob=tail_logprob,
         )
 

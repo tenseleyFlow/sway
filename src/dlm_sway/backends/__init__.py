@@ -69,10 +69,21 @@ def _load_custom(base_spec: ModelSpec, adapter: Path | None) -> DifferentialBack
     The imported class is instantiated as ``Cls(base_spec=..., adapter_path=...)``
     — the same signature as :class:`dlm_sway.backends.hf.HuggingFaceDifferentialBackend`
     so authors can model their implementation on the built-in. The
-    result is runtime-checked against :class:`DifferentialBackend` so
-    protocol violations fail at construction, not deep inside a probe.
+    result is runtime-checked against :class:`DifferentialBackend` and
+    the optional :class:`NullCalibratedBackend` /
+    :class:`ScalableDifferentialBackend` so protocol violations fail
+    at construction, not deep inside a probe (B20). The set of
+    satisfied protocols is recorded on the instance as
+    ``__sway_protocols__: tuple[str, ...]`` for the report's
+    backend-info section.
     """
-    from dlm_sway.core.scoring import DifferentialBackend as DiffBackend
+    from dlm_sway.core.scoring import (
+        DifferentialBackend as DiffBackend,
+    )
+    from dlm_sway.core.scoring import (
+        NullCalibratedBackend,
+        ScalableDifferentialBackend,
+    )
 
     entry = base_spec.entry_point
     if not entry:
@@ -112,6 +123,16 @@ def _load_custom(base_spec: ModelSpec, adapter: Path | None) -> DifferentialBack
             f"custom backend {entry!r} does not satisfy DifferentialBackend "
             "(needs as_base() and as_finetuned() context managers)"
         )
+
+    # B20: probe optional protocols and record them so the runner /
+    # report can show which downstream features are available without
+    # repeated isinstance checks.
+    satisfied: list[str] = ["DifferentialBackend"]
+    if isinstance(instance, NullCalibratedBackend):
+        satisfied.append("NullCalibratedBackend")
+    if isinstance(instance, ScalableDifferentialBackend):
+        satisfied.append("ScalableDifferentialBackend")
+    instance.__sway_protocols__ = tuple(satisfied)  # type: ignore[attr-defined]
     return instance
 
 
