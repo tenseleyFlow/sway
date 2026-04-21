@@ -2,6 +2,11 @@
 
 Differential testing for fine-tuned causal language models.
 
+> **⚠️ Pre-alpha — not on PyPI yet.** This project is in active
+> development and has **not** been published to PyPI. `pip install dlm-sway`
+> will not work. The wheel name is reserved for when publication happens;
+> see [Install](#install-from-source) for how to use sway today.
+
 **One question:** *did LoRA/QLoRA training actually change model behavior
 in a meaningful way, or is the model just defaulting to the pretrained
 base?*
@@ -10,20 +15,57 @@ base?*
 purpose-built primitives, each z-scored against a null-adapter baseline.
 No LLM judges. No external APIs. Deterministic on CPU where possible.
 
-> **Naming note.** The source repo and CLI entry point are both `sway`.
-> The PyPI wheel is named `dlm-sway` because `sway` is already taken on
-> PyPI by an unrelated project. `pip install dlm-sway` installs the
-> `sway` command — mismatched names are a PyPA convention (see
+> **Naming convention (for when PyPI goes live).** The source repo and
+> CLI entry point are both `sway`. The PyPI wheel will be `dlm-sway`
+> because the short `sway` name is already taken on PyPI by an unrelated
+> project. The CLI installed by `pip install dlm-sway` will be
+> `sway` — mismatched wheel/command names are a PyPA convention (see
 > `pyyaml` → `import yaml`).
 
-## Install
+## Install from source
+
+Until the wheel lands on PyPI, install editable from a clone:
 
 ```bash
-pip install "dlm-sway[hf]"                # HuggingFace + PEFT backend
-pip install "dlm-sway[hf,style,semsim]"   # full primitive battery
-pip install "dlm-sway[all]"               # everything including optional viz
-pip install "dlm-sway[dlm]"               # auto-generate tests from a .dlm file
+git clone https://github.com/tenseleyFlow/sway.git
+cd sway
+
+# Create a venv and install with the HF backend extras
+uv venv --python 3.11 .venv      # or: python -m venv .venv
+source .venv/bin/activate
+uv pip install -e ".[hf]" --group dev
 ```
+
+Available extras:
+
+- `[hf]` — HuggingFace + PEFT backend (required for real models)
+- `[mlx]` — Apple Silicon MLX backend (darwin-arm64 only)
+- `[style]` — stylistic fingerprint extensions (spaCy + textstat + nlpaug)
+- `[semsim]` — sentence-transformers for the revert probe
+- `[dlm]` — auto-generate suites from `.dlm` documents
+- `[viz]` — matplotlib plots
+- `[all]` — everything
+
+Verify the install:
+
+```bash
+sway --version
+sway doctor
+```
+
+## Planned PyPI install (not live yet)
+
+Once the wheel ships the install story will be the single-line flavor:
+
+```bash
+# ⚠️ NOT FUNCTIONAL YET — post-PyPI-publish only
+pip install "dlm-sway[hf]"
+pip install "dlm-sway[hf,style,semsim]"
+pip install "dlm-sway[all]"
+pip install "dlm-sway[dlm]"
+```
+
+Watch the repo's Releases for the first published tag.
 
 ## 90-second smoke test
 
@@ -93,10 +135,18 @@ implements `NullCalibratedBackend` (the HF backend does).
 
 If you trained your adapter via the [DocumentLanguageModel
 project](https://github.com/tenseleyFlow/DocumentLanguageModel), `sway`
-auto-generates a test suite from your document's sections:
+auto-generates a test suite from your document's sections.
+
+Install sway with the `[dlm]` extra alongside `[hf]` (pre-PyPI, editable):
 
 ```bash
-pip install "dlm-sway[hf,dlm]"
+# inside a clone of this repo
+uv pip install -e ".[hf,dlm]"
+```
+
+Then:
+
+```bash
 sway autogen path/to/doc.dlm -o sway.yaml
 sway run sway.yaml
 ```
@@ -106,7 +156,9 @@ actually moved the model — a kind of signal no other tool provides.
 
 ## Status
 
-Pre-alpha. API will break. Version `0.1.0` is the first tag.
+Pre-alpha. API will break. Not yet on PyPI — install editable from source
+(see [Install from source](#install-from-source)). Version `0.1.0` will be
+the first published tag; until then, every clone pulls the tip of `main`.
 
 ## License
 
