@@ -257,6 +257,83 @@ def _probe_to_jsonable(r: ProbeResult) -> dict[str, Any]:
     }
 
 
+def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
+    """Reconstruct a ``(SuiteResult, SwayScore)`` pair from saved JSON.
+
+    Inverse of :func:`to_json` for the fields the renderers consume.
+    Missing fields are tolerated — older snapshots predate
+    ``determinism`` and ``schema_version`` — so this helper stays
+    backward-compatible by default. ``sway report --format X`` uses
+    this so all four formats (terminal / md / junit / json) flow
+    through the same renderers as a fresh ``sway run`` (B16).
+    """
+    from datetime import datetime
+
+    from dlm_sway.core.result import (
+        DEFAULT_COMPONENT_WEIGHTS,
+        DeterminismReport,
+        ProbeResult,
+        SuiteResult,
+        SwayScore,
+        Verdict,
+    )
+
+    def _ts(s: str | None) -> datetime:
+        if s:
+            return datetime.fromisoformat(s)
+        # Snapshots that predate the field — give the renderer a
+        # well-defined zero so wall-time displays as 0.00s.
+        return datetime.fromtimestamp(0).astimezone()
+
+    probes = tuple(
+        ProbeResult(
+            name=p["name"],
+            kind=p["kind"],
+            verdict=Verdict(p["verdict"]),
+            score=p.get("score"),
+            raw=p.get("raw"),
+            z_score=p.get("z_score"),
+            base_value=p.get("base_value"),
+            ft_value=p.get("ft_value"),
+            evidence=dict(p.get("evidence") or {}),
+            message=p.get("message", ""),
+            duration_s=float(p.get("duration_s", 0.0)),
+        )
+        for p in raw.get("probes", [])
+    )
+
+    determinism: DeterminismReport | None = None
+    det_raw = raw.get("determinism")
+    if isinstance(det_raw, dict):
+        determinism = DeterminismReport(
+            class_=det_raw.get("class", "best_effort"),
+            seed=int(det_raw.get("seed", 0)),
+            notes=tuple(det_raw.get("notes") or ()),
+        )
+
+    suite = SuiteResult(
+        spec_path=raw.get("spec_path", ""),
+        started_at=_ts(raw.get("started_at")),
+        finished_at=_ts(raw.get("finished_at")),
+        base_model_id=raw.get("base_model_id", ""),
+        adapter_id=raw.get("adapter_id", ""),
+        sway_version=raw.get("sway_version", "?"),
+        probes=probes,
+        null_stats=dict(raw.get("null_stats") or {}),
+        determinism=determinism,
+    )
+
+    score_raw: dict[str, Any] = raw.get("score") or {}
+    score = SwayScore(
+        overall=float(score_raw.get("overall", 0.0)),
+        components=dict(score_raw.get("components") or {}),
+        weights=dict(score_raw.get("weights") or DEFAULT_COMPONENT_WEIGHTS),
+        band=score_raw.get("band", ""),
+        findings=tuple(score_raw.get("findings") or ()),
+    )
+    return suite, score
+
+
 def to_junit(suite: SuiteResult, score: SwayScore) -> str:
     """Serialize as JUnit XML. One ``<testcase>`` per probe."""
     testsuite = ET.Element(
@@ -403,6 +480,7 @@ __all__ = [
     "format_raw",
     "format_score",
     "format_z",
+    "from_json",
     "to_json",
     "to_junit",
     "to_markdown",
