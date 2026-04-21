@@ -173,6 +173,65 @@ class TestProbe:
             f"evidence={dk_result.evidence}, message={dk_result.message}"
         )
 
+    def test_cache_hit_short_circuits_calibration(self, tmp_path, monkeypatch) -> None:
+        """A cached stats blob is loaded without re-running any probes."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+        class _IdBackend(DummyDifferentialBackend):
+            def cache_identity(self) -> str:
+                return "test:id-backend"
+
+        backend = _IdBackend(base=DummyResponses(), ft=DummyResponses())
+
+        # First call: populates the cache.
+        probe, spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                "calibrate_kinds": ["delta_kl"],
+            }
+        )
+        ctx = RunContext(backend=backend)
+        r1 = probe.run(spec, ctx)
+        assert r1.evidence["from_cache"] is False
+
+        # Second call: same params, same identity → cache hit.
+        r2 = probe.run(spec, ctx)
+        assert r2.evidence["from_cache"] is True
+        assert "delta_kl" in r2.evidence["null_stats"]
+
+    def test_cache_disabled_forces_recompute(self, tmp_path, monkeypatch) -> None:
+        """``cache=false`` bypasses the cache even if a prior run populated it."""
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+        class _IdBackend(DummyDifferentialBackend):
+            def cache_identity(self) -> str:
+                return "test:id-backend-2"
+
+        backend = _IdBackend(base=DummyResponses(), ft=DummyResponses())
+        probe, populating_spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                "calibrate_kinds": ["delta_kl"],
+            }
+        )
+        probe.run(populating_spec, RunContext(backend=backend))
+
+        _, fresh_spec = build_probe(
+            {
+                "name": "null",
+                "kind": "null_adapter",
+                "runs": 2,
+                "calibrate_kinds": ["delta_kl"],
+                "cache": False,
+            }
+        )
+        r = probe.run(fresh_spec, RunContext(backend=backend))
+        assert r.evidence["from_cache"] is False
+
     def test_skip_when_backend_not_null_calibrated(self) -> None:
         class _Bare:
             def as_base(self):  # noqa: ANN202

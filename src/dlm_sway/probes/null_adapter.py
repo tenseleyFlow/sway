@@ -42,6 +42,7 @@ from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import NullCalibratedBackend
+from dlm_sway.probes._null_cache import compute_key, load, save
 from dlm_sway.probes._null_proxy import NullCalibrationBackendProxy
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext, registry
 
@@ -67,6 +68,11 @@ class NullAdapterSpec(ProbeSpec):
     ``ctx.downstream_kinds`` (the kinds that appear after this probe
     in the suite). Set explicitly to force calibration of specific
     kinds regardless of suite order."""
+    cache: bool = True
+    """Read / write the on-disk calibration cache under
+    ``~/.dlm-sway/null-stats``. Keyed by backend identity + calibration
+    params. Disable to force a fresh calibration (e.g. when you suspect
+    the cached stats are stale)."""
 
 
 class NullAdapterProbe(Probe):
@@ -113,6 +119,41 @@ class NullAdapterProbe(Probe):
             filtered.append(k)
         target_kinds = filtered
 
+        # Cache lookup: backends can opt in by providing a
+        # ``cache_identity()`` method returning a stable string. The
+        # key incorporates both that identity and the calibration
+        # parameters that actually influence the output.
+        cache_key: str | None = None
+        if spec.cache:
+            backend_identity = _backend_identity(ctx.backend)
+            cache_key = compute_key(
+                backend_identity=backend_identity,
+                params={
+                    "runs": spec.runs,
+                    "init_scale": spec.init_scale,
+                    "seed_base": spec.seed_base,
+                    "top_k": ctx.top_k,
+                    "kinds": sorted(target_kinds),
+                },
+            )
+            cached = load(cache_key)
+            if cached is not None and "null_stats" in cached:
+                cached_evidence: dict[str, Any] = dict(cached)
+                cached_evidence.setdefault("skipped_kinds", [])
+                cached_evidence.setdefault("calibrated_kinds", list(cached["null_stats"].keys()))
+                cached_evidence["weight"] = spec.weight
+                cached_evidence["from_cache"] = True
+                return safe_finalize(
+                    name=spec.name,
+                    kind=spec.kind,
+                    verdict=Verdict.PASS,
+                    score=1.0,
+                    evidence=cached_evidence,
+                    message=(
+                        f"null calibration: {len(cached['null_stats'])} kinds (loaded from cache)"
+                    ),
+                )
+
         per_kind_stats: dict[str, dict[str, float]] = {}
         per_kind_samples: dict[str, list[float]] = {}
         skipped_kinds: list[dict[str, str]] = []
@@ -122,9 +163,7 @@ class NullAdapterProbe(Probe):
             try:
                 cal_spec = probe_cls.calibrate_spec(ctx)
             except Exception as exc:  # noqa: BLE001 — defensive
-                skipped_kinds.append(
-                    {"kind": kind, "reason": f"calibrate_spec raised: {exc}"}
-                )
+                skipped_kinds.append({"kind": kind, "reason": f"calibrate_spec raised: {exc}"})
                 continue
             if cal_spec is None:
                 skipped_kinds.append(
@@ -161,9 +200,7 @@ class NullAdapterProbe(Probe):
                 if raw is not None and math.isfinite(raw):
                     raws.append(float(raw))
                 elif cal_result.verdict == Verdict.ERROR:
-                    errors.append(
-                        f"seed={seed}: probe ERROR — {cal_result.message}"
-                    )
+                    errors.append(f"seed={seed}: probe ERROR — {cal_result.message}")
 
             if raws:
                 mean = statistics.fmean(raws)
@@ -192,12 +229,24 @@ class NullAdapterProbe(Probe):
             "init_scale": spec.init_scale,
             "seed_base": spec.seed_base,
             "weight": spec.weight,
+            "from_cache": False,
         }
 
-        message = (
-            f"null calibration: {len(per_kind_stats)} kinds calibrated "
-            f"over {spec.runs} seeds"
-        )
+        if cache_key is not None:
+            # Persist the stats dict only — the samples list can be
+            # large, and downstream consumers only need the aggregates.
+            save(
+                cache_key,
+                {
+                    "null_stats": per_kind_stats,
+                    "runs": spec.runs,
+                    "init_scale": spec.init_scale,
+                    "seed_base": spec.seed_base,
+                    "calibrated_kinds": list(per_kind_stats.keys()),
+                },
+            )
+
+        message = f"null calibration: {len(per_kind_stats)} kinds calibrated over {spec.runs} seeds"
         if skipped_kinds:
             message += f" ({len(skipped_kinds)} opted out)"
 
@@ -209,6 +258,23 @@ class NullAdapterProbe(Probe):
             evidence=evidence,
             message=message,
         )
+
+
+def _backend_identity(backend: Any) -> str | None:
+    """Ask the backend for a stable cache identity string, if it has one.
+
+    Duck-typed: backends that can't uniquely identify themselves (the
+    dummy backend in tests, for example) simply don't provide this
+    method, and caching is skipped for them.
+    """
+    fn = getattr(backend, "cache_identity", None)
+    if not callable(fn):
+        return None
+    try:
+        value = fn()
+    except Exception:  # noqa: BLE001 — cache is best-effort
+        return None
+    return str(value) if value else None
 
 
 def get_null_stats(ctx: RunContext, probe_kind: str) -> dict[str, float] | None:
