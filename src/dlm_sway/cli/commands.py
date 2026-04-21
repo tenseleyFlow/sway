@@ -259,25 +259,72 @@ def autogen_cmd(
     typer.echo(f"wrote {out}")
 
 
-def doctor_cmd() -> None:
-    """Print backend availability and version info."""
-    console = Console()
-    console.print(f"[bold]sway[/bold] {__version__}")
-    console.print(f"  python:    {sys.version.split()[0]}")
-    console.print(f"  platform:  {sys.platform}")
-    console.print()
+_DOCTOR_BACKENDS: dict[str, tuple[str, ...]] = {
+    "hf": ("torch", "transformers", "peft"),
+    "mlx": ("mlx", "mlx_lm"),
+    "semsim": ("sentence_transformers",),
+    "style": ("spacy", "textstat", "nlpaug"),
+    "dlm": ("dlm",),
+    "viz": ("matplotlib",),
+}
 
+
+def _doctor_payload() -> dict[str, Any]:
+    """Build the JSON-friendly doctor payload (used by both render paths)."""
+    extras: dict[str, dict[str, str | None]] = {}
+    for extra, modules in _DOCTOR_BACKENDS.items():
+        extras[extra] = {mod: _module_version(mod) for mod in modules}
+    return {
+        "sway_version": __version__,
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "extras": extras,
+    }
+
+
+def _module_version(name: str) -> str | None:
+    """Return the installed module's ``__version__`` string, or ``None``."""
+    import importlib
+
+    try:
+        mod = importlib.import_module(name)
+    except ImportError:
+        return None
+    return str(getattr(mod, "__version__", "installed"))
+
+
+def doctor_cmd(
+    json_out: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Emit a machine-readable JSON payload instead of the rich "
+                "terminal layout (D7). CI-grep-friendly."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Print backend availability and version info."""
+    payload = _doctor_payload()
+    if json_out:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    console = Console()
+    console.print(f"[bold]sway[/bold] {payload['sway_version']}")
+    console.print(f"  python:    {payload['python']}")
+    console.print(f"  platform:  {payload['platform']}")
+    console.print()
     console.print("[bold]backends[/bold]")
-    console.print(
-        f"  hf:        {_probe_import('torch')} {_probe_import('transformers')} {_probe_import('peft')}"
-    )
-    console.print(f"  mlx:       {_probe_import('mlx')} {_probe_import('mlx_lm')}")
-    console.print(f"  semsim:    {_probe_import('sentence_transformers')}")
-    console.print(
-        f"  style+:    {_probe_import('spacy')} {_probe_import('textstat')} {_probe_import('nlpaug')}"
-    )
-    console.print(f"  dlm:       {_probe_import('dlm')}")
-    console.print(f"  viz:       {_probe_import('matplotlib')}")
+    for extra, modules in payload["extras"].items():
+        parts = []
+        for mod, ver in modules.items():
+            if ver is None:
+                parts.append(f"[red]{mod}: missing[/red]")
+            else:
+                parts.append(f"[green]{mod}: {ver}[/green]")
+        console.print(f"  {extra:<8}  {' '.join(parts)}")
 
 
 class ReportFormat(StrEnum):
@@ -394,8 +441,26 @@ def _execute_spec(
             sections = handle.sections
             doc_text = handle.doc_text
         except ImportError:
-            # Honoring dlm_source is best-effort — probes that need
-            # sections will SKIP with a pointer at the extra.
+            # D8: don't silently swallow. The user wrote ``dlm_source``
+            # in their YAML expecting the bridge to populate sections;
+            # warn loudly so they know why downstream attribution
+            # probes are SKIPping.
+            typer.secho(
+                f"warning: spec sets dlm_source={spec.dlm_source!r} but the "
+                f"[dlm] extra is not installed — sections not provided "
+                f"(pip install 'dlm-sway[dlm]')",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
+            sections = None
+        except SwayError as exc:
+            # The bridge imported but failed (no adapter, malformed
+            # .dlm, etc). Same surface — warn, don't crash the suite.
+            typer.secho(
+                f"warning: dlm_source={spec.dlm_source!r} did not resolve: {exc}",
+                err=True,
+                fg=typer.colors.YELLOW,
+            )
             sections = None
     if spec.defaults.differential:
         backend: Any = build_backend(spec.models.ft)
@@ -443,16 +508,5 @@ def _close_if_possible(backend: object) -> None:
     close = getattr(backend, "close", None)
     if callable(close):
         close()
-
-
-def _probe_import(name: str) -> str:
-    import importlib
-
-    try:
-        mod = importlib.import_module(name)
-    except ImportError:
-        return f"[red]{name}: missing[/red]"
-    ver = getattr(mod, "__version__", "installed")
-    return f"[green]{name}: {ver}[/green]"
 
 
