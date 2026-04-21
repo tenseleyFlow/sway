@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### Sprint 11 — `sway compare` across saved JSON runs
+
+Closes Audit 01 innovation item F5. Ships the regression-dashboard
+primitive every CI integration reached for but had to script.
+
+- **New CLI subcommand `sway compare`.** Accepts N saved result JSONs
+  (typically from `sway run --json`), rehydrates each via
+  `report.from_json`, folds them into a score matrix, and renders:
+  a per-probe score table with columns per run, per-adjacent-pair
+  delta columns (colored red on drop / green on lift), and a
+  composite-score timeline row. Formats: `terminal` (default, Rich),
+  `--format md`, `--format json`.
+- **`--fail-on-regression <threshold>`.** Exits 1 when any probe's
+  score in the newest run dropped ≥ `threshold` vs the prior run.
+  `threshold=0` (default) disables the gate. Gate fires after the
+  output is emitted so CI logs always capture the matrix even on
+  red builds.
+- **`suite/compare.py` module.** Clean separation: `build_matrix`
+  folds `(SuiteResult, SwayScore)` pairs into a `CompareMatrix`
+  dataclass; `render_{terminal,markdown,json}` consume that. No
+  filesystem IO in the module itself — the CLI owns the reads, the
+  renderers own the writes. Probes that disappeared between runs
+  show as `None` / em-dash in the matrix; new probes show as
+  `None` on older runs. Union of probe names is sorted for stable
+  row order across invocations.
+- **Markdown snapshot locked** at `tests/snapshots/compare.md` —
+  silent schema drift breaks the test like every other snapshot.
+- **Committed history fixture + prove-the-value test.**
+  `tests/fixtures/sway-history/{01,02,03}-*.json` ship a three-run
+  narrative: baseline → retrained-improved → over-trained. Run 03
+  plants a `section_internalization` drop of 0.22 and a
+  `calibration_drift` drop of 0.25 while `delta_kl` still rises
+  (the memorization-without-generalization failure mode).
+  `test_compare_catches_planted_regression` invokes
+  `sway compare sway-history/*.json --fail-on-regression 0.10` and
+  asserts exit=1 with both regressed probes surfaced in the JSON
+  payload and terminal text — exactly the F5 "CI gate the build on
+  regression" experiment.
+
 ### Sprint 10 — Multi-rank adversarial null adapters
 
 Closes Audit 01 innovation item F4. Extends the S02 null-calibration
