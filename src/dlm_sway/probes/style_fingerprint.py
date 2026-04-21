@@ -158,9 +158,7 @@ def _extended_fingerprint(text: str) -> NDArray[np.float64] | None:
         four_grams = [tuple(pos_tags[i : i + 4]) for i in range(len(pos_tags) - 3)]
         counts = Counter(four_grams)
         total = sum(counts.values())
-        pos_entropy_bits = -sum(
-            (c / total) * math.log2(c / total) for c in counts.values()
-        )
+        pos_entropy_bits = -sum((c / total) * math.log2(c / total) for c in counts.values())
 
     syllables_per_word = float(textstat.syllable_count(text)) / max(len(pos_tags), 1)
 

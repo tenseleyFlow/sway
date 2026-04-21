@@ -105,9 +105,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     c.print()
     footer = f"wall: {suite.wall_seconds:.2f}s  |  sway {suite.sway_version}"
     if suite.determinism is not None:
-        footer += (
-            f"  |  det: {suite.determinism.class_} (seed={suite.determinism.seed})"
-        )
+        footer += f"  |  det: {suite.determinism.class_} (seed={suite.determinism.seed})"
     c.print(Text(footer, style="dim"))
 
 

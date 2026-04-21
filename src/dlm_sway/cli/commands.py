@@ -403,9 +403,7 @@ def _parse_weights_flag(raw: str | None) -> dict[str, float] | None:
         try:
             out[key] = float(value.strip())
         except ValueError as exc:
-            raise typer.BadParameter(
-                f"--weights: {value!r} for {key!r} is not a number"
-            ) from exc
+            raise typer.BadParameter(f"--weights: {value!r} for {key!r} is not a number") from exc
     return out or None
 
 
