@@ -534,6 +534,27 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         for kind in opt_outs:
             buf.write(f"- `{kind}`\n")
 
+    # F07 — cluster_kl sub-line: expand the per-cluster breakdown so
+    # the reader can answer "which topic moved?" without cracking open
+    # the JSON. The row itself already carries ``k=N, spec=X.XX`` in
+    # the message; this section adds the per-cluster mean KL + top
+    # exemplars.
+    ck_probes = [p for p in suite.probes if p.kind == "cluster_kl" and p.evidence]
+    if ck_probes:
+        buf.write("\n## Cluster breakdown (cluster_kl)\n\n")
+        for p in ck_probes:
+            per_cluster = p.evidence.get("per_cluster_mean_kl", [])
+            sizes = p.evidence.get("per_cluster_size", [])
+            exemplars = p.evidence.get("cluster_exemplars", [])
+            buf.write(f"### `{p.name}`\n\n")
+            buf.write("| cluster | size | mean KL | exemplars |\n")
+            buf.write("|---:|---:|---:|---|\n")
+            for i, (mean, size, ex) in enumerate(zip(per_cluster, sizes, exemplars, strict=False)):
+                mean_str = "—" if not isinstance(mean, int | float) else f"{mean:.3f}"
+                ex_str = "; ".join(e.replace("|", "\\|") for e in (ex or [])) or "—"
+                buf.write(f"| {i} | {size} | {mean_str} | {ex_str} |\n")
+            buf.write("\n")
+
     return buf.getvalue()
 
 
