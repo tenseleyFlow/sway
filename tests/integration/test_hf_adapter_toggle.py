@@ -113,9 +113,7 @@ def test_roundtrip_toggle_restores_base(tiny_model_dir: Path, random_adapter: Pa
         backend.close()
 
 
-def test_disable_re_enable_bit_identical_logits(
-    tiny_model_dir: Path, random_adapter: Path
-) -> None:
+def test_disable_re_enable_bit_identical_logits(tiny_model_dir: Path, random_adapter: Path) -> None:
     """B15 mitigation: ft → base → ft produces bit-identical ft logits.
 
     Subtle state corruption inside ``disable_adapter()`` (e.g. a wrong
