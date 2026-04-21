@@ -1,0 +1,46 @@
+# Determinism golden spec (S18).
+#
+# Pins a minimal 2-probe suite the CI runs on both ubuntu-latest and
+# macos-latest-xlarge to catch silent algorithm drift. Intentionally
+# small: one delta_kl probe + one calibration_drift probe, 4 prompts
+# each, no null_adapter (null adds runtime without improving the
+# drift-detection signal — the golden already encodes the exact
+# raw/score values).
+#
+# ``models.base.base`` and ``models.ft.adapter`` are placeholders —
+# the golden test's fixture substitutes paths at runtime so the
+# checked-in spec stays portable.
+
+version: 1
+models:
+  base:
+    base: placeholder-base
+    kind: hf
+    adapter: placeholder-base-adapter
+    dtype: fp32
+    device: cpu
+  ft:
+    base: placeholder-base
+    kind: hf
+    adapter: placeholder-ft-adapter
+    dtype: fp32
+    device: cpu
+defaults:
+  seed: 0
+  differential: true
+suite:
+  - name: dk_golden
+    kind: delta_kl
+    prompts:
+      - The capital of France is
+      - Water boils at a temperature of
+      - The sun rises in the
+      - Python decorators are useful for
+    divergence: js
+    assert_mean_gte: 0.0
+  - name: cal_golden
+    kind: calibration_drift
+    items_limit: 20
+    regression_nats: 1.0
+    assert_mean_delta_gte: -0.5
+    assert_fraction_regressed_lt: 0.15
