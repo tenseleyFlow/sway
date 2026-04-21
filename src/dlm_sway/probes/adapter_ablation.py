@@ -34,7 +34,14 @@ from pydantic import Field
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import ScalableDifferentialBackend
 from dlm_sway.probes._divergence import Divergence, divergence
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 
 class AdapterAblationSpec(ProbeSpec):
@@ -49,6 +56,11 @@ class AdapterAblationSpec(ProbeSpec):
     assert_linearity_gte: float = 0.85
     assert_saturation_between: tuple[float, float] = (0.3, 1.05)
     assert_overshoot_gte: float = 1.02
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Note: this probe usually opts out of calibration (the null
+    proxy doesn't expose ``as_scaled_adapter``); the z-score path is
+    retained only for shape consistency with the rest of the suite."""
 
 
 class AdapterAblationProbe(Probe):
@@ -109,24 +121,39 @@ class AdapterAblationProbe(Probe):
             and sat_reason in ("found", "non_monotonic")
         )
         ok_over = overshoot >= spec.assert_overshoot_gte
-        verdict = Verdict.PASS if (ok_lin and ok_sat and ok_over) else Verdict.FAIL
 
-        lin_score = max(0.0, min(1.0, linearity / max(spec.assert_linearity_gte, 1e-6)))
-        over_score = max(0.0, min(1.0, (overshoot - 1.0) / 0.2))
-        sat_score = 1.0 if ok_sat else 0.3
-        score = 0.4 * lin_score + 0.3 * sat_score + 0.3 * over_score
+        stats = get_null_stats(ctx, spec.kind)
+        z = z_score(linearity, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+        else:
+            verdict = Verdict.PASS if (ok_lin and ok_sat and ok_over) else Verdict.FAIL
+            lin_score = max(0.0, min(1.0, linearity / max(spec.assert_linearity_gte, 1e-6)))
+            over_score = max(0.0, min(1.0, (overshoot - 1.0) / 0.2))
+            sat_score = 1.0 if ok_sat else 0.3
+            score = 0.4 * lin_score + 0.3 * sat_score + 0.3 * over_score
 
         sat_msg = (
             f"sat_λ={saturation_lambda:.2f} ({'in' if ok_sat else 'out of'} band)"
             if saturation_lambda is not None
             else f"saturation undetected ({sat_reason})"
         )
+        base_msg = f"R²={linearity:.2f}, {sat_msg}, overshoot={overshoot:.2f}"
+        if z is not None:
+            message = f"{base_msg}, z={z:+.2f}σ vs null"
+        else:
+            message = f"{base_msg} {no_calibration_note(spec.kind)}"
+
         return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
             score=score,
             raw=linearity,
+            z_score=z,
             evidence={
                 "lambdas": spec.lambdas,
                 "mean_divergence_per_lambda": per_lambda,
@@ -139,7 +166,7 @@ class AdapterAblationProbe(Probe):
                 "passed_overshoot": ok_over,
                 "weight": spec.weight,
             },
-            message=f"R²={linearity:.2f}, {sat_msg}, overshoot={overshoot:.2f}",
+            message=message,
         )
 
 

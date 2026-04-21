@@ -66,6 +66,11 @@ class RunContext:
         Null-adapter baseline stats for z-score calibration, keyed by
         probe *kind*. Populated by the runner after it's executed the
         ``null_adapter`` probe (if configured).
+    downstream_kinds:
+        Tuple of probe kinds that appear *after* the current probe in
+        the suite. Populated by the runner before each probe runs;
+        ``NullAdapterProbe`` consults it to decide which probe kinds
+        to calibrate per-kind null stats for.
     """
 
     backend: DifferentialBackend
@@ -74,9 +79,33 @@ class RunContext:
     sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
     null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
+    downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
 
 
 _REGISTRY: dict[str, type[Probe]] = {}
+
+
+#: Generic LM-agnostic prompts used as sentinel inputs by per-probe
+#: ``calibrate_spec()`` overrides. Each is short, content-neutral, and
+#: should produce a finite logprob from any sane base model.
+SENTINEL_PROMPTS: tuple[str, ...] = (
+    "The capital of",
+    "Once upon a time",
+    "An interesting fact is",
+    "The next step is to",
+)
+
+
+#: A fixed reference paragraph for stylistic-fingerprint calibration.
+#: Mid-length, mid-complexity prose so the fingerprint vector exercises
+#: every dimension non-degenerately.
+SENTINEL_DOC: str = (
+    "This is a brief reference paragraph. It contains several short "
+    "sentences. The vocabulary is plain and the punctuation density "
+    "is moderate. A second paragraph follows the first.\n\n"
+    "Each clause is concise. Together they sample the fingerprint "
+    "dimensions a probe needs to compute a meaningful style shift."
+)
 
 
 class Probe(ABC):
@@ -102,6 +131,25 @@ class Probe(ABC):
 
     @abstractmethod
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult: ...
+
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> ProbeSpec | None:
+        """Return a small spec for null-adapter calibration of this kind.
+
+        ``NullAdapterProbe`` calls this once per kind in
+        ``ctx.downstream_kinds`` to harvest the per-kind null
+        distribution. Returning ``None`` opts the kind out of
+        calibration — downstream probes of that kind fall back to
+        their fixed-threshold paths and surface ``(no calibration)``
+        in the report.
+
+        Default returns ``None``. Probes that *can* be calibrated
+        override to return a small spec (typically 4 sentinel prompts,
+        minimal compute) suitable for running against the
+        :class:`~dlm_sway.probes._null_proxy.NullCalibrationBackendProxy`.
+        """
+        del ctx
+        return None
 
 
 def registry() -> dict[str, type[Probe]]:

@@ -355,6 +355,15 @@ class HuggingFaceDifferentialBackend:
     _PREFLIGHT_PROMPT = "hello"
     _PREFLIGHT_TOP_K = 8
 
+    def cache_identity(self) -> str:
+        """Stable string identifying this backend for on-disk caching.
+
+        The base model id + the adapter's resolved absolute path is
+        enough to key a null-calibration cache: swapping either
+        invalidates the previously-computed stats.
+        """
+        return f"hf:{self._spec.base}:{self._adapter_path}"
+
     def preflight_finite_check(self) -> tuple[bool, str]:
         """One forward pass per view; assert both produce finite logits.
 

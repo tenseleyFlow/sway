@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### Sprint 02 — Universal z-score calibration
+
+Closes Audit 01 findings P02 (delivery), B2, C9.
+
+- **`NullAdapterProbe` is now a per-kind calibration matrix**: iterates
+  every downstream numeric kind in the suite (or an explicit
+  `calibrate_kinds` list), runs a miniature version of each through the
+  `NullCalibrationBackendProxy` for N seeds, and publishes
+  `{kind: {mean, std, n}}` under `evidence["null_stats"]`. The old
+  "publishes two keys only" implementation is gone (closes B2).
+- **`NullCalibrationBackendProxy`** (`_null_proxy.py`): swaps
+  `as_finetuned()` to yield `as_null_adapter(seed)` so every numeric
+  probe's own math produces the "what does my metric look like when the
+  fine-tune is structural noise?" distribution without a bespoke code
+  path per probe.
+- **`Probe.calibrate_spec(ctx)` classmethod** plus
+  `SENTINEL_PROMPTS` / `SENTINEL_DOC` shared constants in
+  `probes/base.py`. Each numeric probe overrides `calibrate_spec` to
+  return a small, cheap spec for calibration; probes that can't be
+  meaningfully calibrated (e.g. `adapter_revert` needs an embedder,
+  `adapter_ablation` needs `as_scaled_adapter`, `prompt_collapse`
+  can't fit an exponential decay to null noise) opt out by returning
+  `None` and surface `(no calibration for <kind>)` in the report.
+- **Shared `_zscore` helpers** (`probes/_zscore.py`):
+  `z_score(raw, stats)`, `verdict_from_z(z, threshold)`,
+  `score_from_z(z)`, `no_calibration_note(kind)`. Every numeric probe
+  now flows through these — no bespoke `(raw - mean) / std` math left
+  in any probe file. Includes the `MIN_STD = 1e-6` floor so a
+  degenerate null distribution (e.g. a single-seed calibration) can't
+  produce an infinite z-score (closes C9).
+- **All 10 numeric probes thread `get_null_stats(ctx, self.kind)`**:
+  `delta_kl`, `adapter_revert`, `prompt_collapse`,
+  `section_internalization`, `paraphrase_invariance`,
+  `preference_flip`, `style_fingerprint`, `calibration_drift`,
+  `leakage`, `adapter_ablation`. Each has an `assert_z_gte: float = 3.0`
+  that is *preferred* when stats exist. Lower-is-better probes
+  (`adapter_revert`, `calibration_drift`, `leakage`) sign-flip the
+  z internally so the shared `z >= threshold` PASS rule still reads as
+  "significantly better than null". Two probes (`paraphrase_invariance`,
+  `calibration_drift`) keep their intent-aware / compound thresholds
+  as the no-calibration fallback.
+- **On-disk null-stats cache** (`probes/_null_cache.py`,
+  `backends/hf.py`): HF backend exposes `cache_identity()`;
+  `NullAdapterProbe` hashes `(backend_identity, runs, init_scale,
+  seed_base, top_k, kinds)` into a stable filename under
+  `~/.dlm-sway/null-stats/<key>.json` (XDG-respecting). Cache is
+  best-effort — a missing / malformed file rebuilds. Disable per-suite
+  with `cache: false` in the spec, or globally with
+  `SWAY_DISABLE_NULL_CACHE=1`. The dummy backend doesn't expose a
+  cache identity, so tests never touch disk unless they opt in.
+- **Report shows z-scores in every numeric probe row**: the terminal
+  renderer already had a `z` column; the markdown renderer now does
+  too. Rows that fell back to fixed thresholds carry
+  `(no calibration for <kind>)` directly in the message.
+
 ### Sprint 01 — Finite safety & verdict integrity
 
 Closes Audit 01 findings B1, B3 (fix), B4, B5, C3, C4, D1, D2.

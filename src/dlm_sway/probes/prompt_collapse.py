@@ -22,7 +22,14 @@ from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._divergence import Divergence, divergence
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 # A neutral, token-dense piece of text we prepend to stress the base
 # model's long-context handling. Deliberately low-information so the
@@ -48,12 +55,21 @@ class PromptCollapseSpec(ProbeSpec):
     assert_half_life_tokens: int = 512
     """Minimum half-life to pass. Default is deliberately permissive —
     tune upward for high-stakes deployments."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Preferred over the raw threshold."""
 
 
 class PromptCollapseProbe(Probe):
     kind = "prompt_collapse"
     spec_cls = PromptCollapseSpec
     category = "adherence"
+
+    # prompt_collapse opts out of null calibration: a null adapter has
+    # no signal to decay, so ``_fit_half_life`` returns ``None`` on most
+    # seeds. The null distribution of half_life is therefore not
+    # well-defined, and a z-score comparison is semantically meaningless.
+    # Fixed-threshold verdicts remain the published path for this probe.
 
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, PromptCollapseSpec)
@@ -86,24 +102,36 @@ class PromptCollapseProbe(Probe):
             np.asarray(mean_divs, dtype=np.float64),
         )
 
-        verdict = (
-            Verdict.PASS
-            if half_life is not None and half_life >= spec.assert_half_life_tokens
-            else Verdict.FAIL
-        )
-        score = _score(half_life, spec.assert_half_life_tokens)
-
-        msg = (
-            f"half-life={half_life:.0f} tokens"
-            if half_life is not None
-            else "could not fit exponential decay (too flat or non-monotonic)"
-        )
+        # Null-adapter calibration wins when available.
+        z: float | None = None
+        if half_life is not None:
+            stats = get_null_stats(ctx, spec.kind)
+            z = z_score(half_life, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            msg = f"half-life={half_life:.0f} tokens, z={z:+.2f}σ vs null"
+        else:
+            verdict = (
+                Verdict.PASS
+                if half_life is not None and half_life >= spec.assert_half_life_tokens
+                else Verdict.FAIL
+            )
+            score = _score(half_life, spec.assert_half_life_tokens)
+            msg = (
+                f"half-life={half_life:.0f} tokens {no_calibration_note(spec.kind)}"
+                if half_life is not None
+                else "could not fit exponential decay (too flat or non-monotonic)"
+            )
         return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
             score=score,
             raw=half_life,
+            z_score=z,
             evidence={
                 "context_lengths": spec.context_lengths,
                 "mean_divergence_per_length": mean_divs,

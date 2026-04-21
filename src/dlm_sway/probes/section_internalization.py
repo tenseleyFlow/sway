@@ -33,7 +33,14 @@ from pydantic import Field
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.core.scoring import ScoringBackend
 from dlm_sway.core.sections import Section, SectionKind
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 
 def _default_include_kinds() -> list[SectionKind]:
@@ -48,6 +55,10 @@ class SectionInternalizationSpec(ProbeSpec):
     assert_passing_section_frac: float = 0.5
     """Probe-level pass criterion: fraction of sections that must clear
     the per-section threshold."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Preferred over the raw threshold. The statistic z-scored is
+    the mean ``effective_sis`` across sections."""
     max_prose_chars: int = 2000
     """Cap the length of PROSE content we score to keep runtime bounded.
     Long sections are chunked; this is the per-chunk cap."""
@@ -57,6 +68,17 @@ class SectionInternalizationProbe(Probe):
     kind = "section_internalization"
     spec_cls = SectionInternalizationSpec
     category = "attribution"
+
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> SectionInternalizationSpec | None:
+        # Needs sections; if the bridge didn't populate them, opt out.
+        if ctx.sections is None or len(ctx.sections) < 2:
+            return None
+        return SectionInternalizationSpec(
+            name="_calibration",
+            kind="section_internalization",
+            per_section_threshold=0.05,
+        )
 
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, SectionInternalizationSpec)
@@ -122,14 +144,38 @@ class SectionInternalizationProbe(Probe):
             )
 
         passing_frac = passing / len(eligible)
-        verdict = Verdict.PASS if passing_frac >= spec.assert_passing_section_frac else Verdict.FAIL
-        score = passing_frac
+        raw_mean = statistics.fmean(effective_scores)
+
+        # Null-adapter calibration wins when available.
+        stats = get_null_stats(ctx, spec.kind)
+        z = z_score(raw_mean, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = (
+                f"{passing}/{len(eligible)} sections cleared; "
+                f"mean effective_sis={raw_mean:+.3f}, z={z:+.2f}σ vs null"
+            )
+        else:
+            verdict = (
+                Verdict.PASS if passing_frac >= spec.assert_passing_section_frac else Verdict.FAIL
+            )
+            score = passing_frac
+            message = (
+                f"{passing}/{len(eligible)} sections cleared "
+                f"effective_sis≥{spec.per_section_threshold:.2f} "
+                f"(mean={raw_mean:+.3f}) {no_calibration_note(spec.kind)}"
+            )
+
         return safe_finalize(
             name=spec.name,
             kind=spec.kind,
             verdict=verdict,
             score=score,
-            raw=statistics.fmean(effective_scores),
+            raw=raw_mean,
+            z_score=z,
             evidence={
                 "per_section": per_section,
                 "num_sections": len(eligible),
@@ -137,10 +183,7 @@ class SectionInternalizationProbe(Probe):
                 "per_section_threshold": spec.per_section_threshold,
                 "weight": spec.weight,
             },
-            message=(
-                f"{passing}/{len(eligible)} sections cleared "
-                f"effective_sis≥{spec.per_section_threshold:.2f} (mean={statistics.fmean(effective_scores):+.3f})"
-            ),
+            message=message,
         )
 
 

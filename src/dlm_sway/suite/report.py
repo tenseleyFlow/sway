@@ -198,11 +198,12 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     for cat, v in score.components.items():
         buf.write(f"| {cat} | {v:.2f} |\n")
     buf.write("\n## Probes\n\n")
-    buf.write("| name | kind | verdict | score | note |\n|---|---|---|---:|---|\n")
+    buf.write("| name | kind | verdict | score | z | note |\n|---|---|---|---:|---:|---|\n")
     for r in suite.probes:
         buf.write(
             f"| {r.name} | `{r.kind}` | {r.verdict.value} | "
             f"{f'{r.score:.2f}' if r.score is not None else '—'} | "
+            f"{f'{r.z_score:+.2f}σ' if r.z_score is not None else '—'} | "
             f"{r.message[:60]} |\n"
         )
     if score.findings:

@@ -22,6 +22,12 @@ from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._divergence import Divergence, divergence, js_ln2
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
 from dlm_sway.probes.null_adapter import get_null_stats
 
@@ -52,6 +58,17 @@ class DeltaKLProbe(Probe):
     spec_cls = DeltaKLSpec
     category = "adherence"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> DeltaKLSpec | None:
+        from dlm_sway.probes.base import SENTINEL_PROMPTS
+
+        return DeltaKLSpec(
+            name="_calibration",
+            kind="delta_kl",
+            prompts=list(SENTINEL_PROMPTS),
+            top_k=ctx.top_k,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, DeltaKLSpec)
         if not spec.prompts:
@@ -76,26 +93,22 @@ class DeltaKLProbe(Probe):
         raw_max = max(divergences)
 
         # Null-adapter calibration wins when available.
-        null = get_null_stats(ctx, spec.kind)
-        z = None
-        if null is not None and null.get("std", 0.0) > 0.0:
-            z = (raw_mean - null["mean"]) / null["std"]
-            verdict = Verdict.PASS if z >= spec.assert_z_gte else Verdict.FAIL
+        stats = get_null_stats(ctx, spec.kind)
+        z = z_score(raw_mean, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score = score_from_z(z) or 0.0
             message = f"mean {spec.divergence}={raw_mean:.4f}, z={z:+.2f}σ vs null"
         else:
             verdict = Verdict.PASS if raw_mean >= spec.assert_mean_gte else Verdict.FAIL
-            message = (
-                f"mean {spec.divergence}={raw_mean:.4f} "
-                f"({'≥' if verdict == Verdict.PASS else '<'} {spec.assert_mean_gte})"
-            )
-
-        # Normalized score for composite: JS is bounded by ln(2), so
-        # sigmoid-ish on (z, or raw / bound) keeps the number in [0, 1].
-        if z is not None:
-            score = _sigmoid(z / 3.0)
-        else:
             bound = js_ln2() if spec.divergence == "js" else 1.0
             score = min(1.0, raw_mean / bound) if bound > 0.0 else 0.0
+            message = (
+                f"mean {spec.divergence}={raw_mean:.4f} "
+                f"({'≥' if verdict == Verdict.PASS else '<'} {spec.assert_mean_gte}) "
+                f"{no_calibration_note(spec.kind)}"
+            )
 
         return safe_finalize(
             name=spec.name,
@@ -113,9 +126,3 @@ class DeltaKLProbe(Probe):
             },
             message=message,
         )
-
-
-def _sigmoid(x: float) -> float:
-    import math
-
-    return 1.0 / (1.0 + math.exp(-x))

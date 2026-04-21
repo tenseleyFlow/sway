@@ -25,7 +25,14 @@ from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
 from dlm_sway.probes._calibration_pack import BUILT_IN_PACK
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 
 class CalibrationItemSpec(ProbeSpec):
@@ -47,6 +54,12 @@ class CalibrationDriftSpec(ProbeSpec):
     assert_mean_delta_gte: float = -0.5
     """Mean per-token logprob delta (ft − base) across the pack. Slightly
     negative is tolerable; deeply negative is not."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. This is a lower-is-better probe (we want *fewer* regressions
+    than the null adapter), so the z-score is negated before comparison:
+    the adapter must be at least ``assert_z_gte`` σ *below* the null
+    baseline's ``frac_regressed`` distribution."""
     regression_nats: float = 1.0
     """How many nats worse an item must get to count as regressed."""
     items: list[tuple[str, str]] = Field(default_factory=list)
@@ -57,6 +70,16 @@ class CalibrationDriftProbe(Probe):
     kind = "calibration_drift"
     spec_cls = CalibrationDriftSpec
     category = "calibration"
+
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> CalibrationDriftSpec | None:
+        del ctx
+        # Use the built-in pack but capped to keep calibration fast.
+        return CalibrationDriftSpec(
+            name="_calibration",
+            kind="calibration_drift",
+            items_limit=10,
+        )
 
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, CalibrationDriftSpec)
@@ -95,17 +118,38 @@ class CalibrationDriftProbe(Probe):
         frac_regressed = regressed / len(items)
         mean_delta = statistics.fmean(deltas)
 
-        passed = (
-            frac_regressed < spec.assert_fraction_regressed_lt
-            and mean_delta >= spec.assert_mean_delta_gte
-        )
-        verdict = Verdict.PASS if passed else Verdict.FAIL
-        # Score: 1.0 at zero regression + zero drift, declining with either.
-        regress_component = max(
-            0.0, 1.0 - frac_regressed / max(spec.assert_fraction_regressed_lt, 1e-6)
-        )
-        drift_component = max(0.0, min(1.0, (mean_delta + 1.0) / 1.5))
-        score = 0.6 * regress_component + 0.4 * drift_component
+        # Lower-is-better probe: negate the z-score so the shared
+        # ``z >= assert_z_gte`` semantics mean "adapter is σ *better*
+        # than null".
+        stats = get_null_stats(ctx, spec.kind)
+        raw_z = z_score(frac_regressed, stats)
+        z = -raw_z if raw_z is not None else None
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = (
+                f"{regressed}/{len(items)} items regressed "
+                f"(frac={frac_regressed:.1%}), mean_delta={mean_delta:+.3f} "
+                f"nats/tok, z={z:+.2f}σ vs null"
+            )
+        else:
+            passed = (
+                frac_regressed < spec.assert_fraction_regressed_lt
+                and mean_delta >= spec.assert_mean_delta_gte
+            )
+            verdict = Verdict.PASS if passed else Verdict.FAIL
+            regress_component = max(
+                0.0, 1.0 - frac_regressed / max(spec.assert_fraction_regressed_lt, 1e-6)
+            )
+            drift_component = max(0.0, min(1.0, (mean_delta + 1.0) / 1.5))
+            score = 0.6 * regress_component + 0.4 * drift_component
+            message = (
+                f"{regressed}/{len(items)} items regressed >{spec.regression_nats:.1f} nats "
+                f"(frac={frac_regressed:.1%}), mean_delta={mean_delta:+.3f} nats/tok "
+                f"{no_calibration_note(spec.kind)}"
+            )
 
         return safe_finalize(
             name=spec.name,
@@ -113,6 +157,7 @@ class CalibrationDriftProbe(Probe):
             verdict=verdict,
             score=score,
             raw=frac_regressed,
+            z_score=z,
             base_value=None,
             ft_value=mean_delta,
             evidence={
@@ -124,10 +169,7 @@ class CalibrationDriftProbe(Probe):
                 "regression_nats_threshold": spec.regression_nats,
                 "weight": spec.weight,
             },
-            message=(
-                f"{regressed}/{len(items)} items regressed >{spec.regression_nats:.1f} nats "
-                f"(frac={frac_regressed:.1%}), mean_delta={mean_delta:+.3f} nats/tok"
-            ),
+            message=message,
         )
 
 
