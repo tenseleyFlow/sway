@@ -20,7 +20,10 @@
   "probes": [
     {
       "base_value": null,
-      "ci_95": null,
+      "ci_95": [
+        0.412,
+        0.497
+      ],
       "duration_s": 0.123,
       "evidence": {
         "divergence_kind": "js",
