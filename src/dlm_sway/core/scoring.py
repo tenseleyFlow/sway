@@ -79,8 +79,22 @@ class TokenDist:
     """Log-probabilities for :attr:`token_ids`. Length ``k``."""
     vocab_size: int
     """Full vocab size — needed to renormalize top-k truncated slices."""
-    tail_logprob: float = field(default=0.0)
-    """log of (1 - sum of exp(logprobs[:k])); 0 if top_k covers the full vocab."""
+    tail_logprob: float | None = field(default=None)
+    """Log of the residual mass outside the top-k slice (B6).
+
+    Three states the consumer must distinguish:
+
+    - ``None`` — the top-k slice already covers the full vocabulary
+      (``k == vocab_size``) or the residual underflowed below the
+      backend's reportable floor. Treat as "no tail to redistribute."
+    - ``0.0`` — the residual mass is *exactly* zero in fp32. A real
+      tail exists in theory but isn't measurable above the backend's
+      epsilon. Equivalent to ``None`` for divergence math but kept
+      separate so backends with extra precision can opt in.
+    - ``float`` (negative) — measurable tail mass. Divergence helpers
+      redistribute this evenly across the vocab tokens not in either
+      side's top-k.
+    """
 
 
 @runtime_checkable

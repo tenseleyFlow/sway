@@ -185,14 +185,20 @@ class _HFView:
         with torch.inference_mode():
             logits = self._model(ids).logits[:, -1, :]  # (1, V)
         log_probs = F.log_softmax(logits.float(), dim=-1).squeeze(0)
-        k = min(top_k, int(log_probs.shape[0]))
+        vocab = int(log_probs.shape[0])
+        k = min(top_k, vocab)
         top = torch.topk(log_probs, k=k)
-        tail_mass = float(1.0 - torch.exp(top.values).sum().item())
-        tail_logprob = float(np.log(max(tail_mass, 1e-12))) if tail_mass > 1e-12 else 0.0
+        # B6: distinguish "no tail" (k covers vocab) from "measurable tail"
+        # from "underflowed-to-zero tail." See TokenDist.tail_logprob docs.
+        if k == vocab:
+            tail_logprob: float | None = None
+        else:
+            tail_mass = float(1.0 - torch.exp(top.values).sum().item())
+            tail_logprob = float(np.log(tail_mass)) if tail_mass > 1e-12 else 0.0
         return TokenDist(
             token_ids=top.indices.cpu().numpy().astype(np.int64),
             logprobs=top.values.cpu().numpy().astype(np.float32),
-            vocab_size=int(log_probs.shape[0]),
+            vocab_size=vocab,
             tail_logprob=tail_logprob,
         )
 
@@ -405,7 +411,9 @@ class HuggingFaceDifferentialBackend:
                     f"producing non-finite outputs.",
                 )
             tail = dist.tail_logprob
-            if not math.isfinite(tail):
+            # B6: ``None`` is a sentinel for "k covered the whole vocab,"
+            # not a numeric value to range-check.
+            if tail is not None and not math.isfinite(tail):
                 return (
                     False,
                     f"{label} view produced non-finite tail_logprob = {tail}",
