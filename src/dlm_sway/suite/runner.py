@@ -95,7 +95,10 @@ def run(
                 null_stats={},
             )
 
-    for raw in spec.suite:
+    # Pre-extract suite kinds so each probe sees only what's *after* it.
+    suite_kinds: list[str] = [str(entry.get("kind", "")) for entry in spec.suite]
+
+    for idx, raw in enumerate(spec.suite):
         probe, probe_spec = build_probe(raw)
         if not probe_spec.enabled:
             results.append(
@@ -108,6 +111,20 @@ def run(
                 )
             )
             continue
+
+        # Refresh ctx.downstream_kinds for this probe. The current
+        # null_adapter probe wants to know which probe kinds it's
+        # calibrating *for* — that's the kinds in the suite after itself.
+        downstream_kinds = tuple(k for k in suite_kinds[idx + 1 :] if k)
+        ctx = RunContext(
+            backend=ctx.backend,
+            seed=ctx.seed,
+            top_k=ctx.top_k,
+            sections=ctx.sections,
+            doc_text=ctx.doc_text,
+            null_stats=ctx.null_stats,
+            downstream_kinds=downstream_kinds,
+        )
 
         t0 = time.perf_counter()
         try:

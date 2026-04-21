@@ -66,6 +66,11 @@ class RunContext:
         Null-adapter baseline stats for z-score calibration, keyed by
         probe *kind*. Populated by the runner after it's executed the
         ``null_adapter`` probe (if configured).
+    downstream_kinds:
+        Tuple of probe kinds that appear *after* the current probe in
+        the suite. Populated by the runner before each probe runs;
+        ``NullAdapterProbe`` consults it to decide which probe kinds
+        to calibrate per-kind null stats for.
     """
 
     backend: DifferentialBackend
@@ -74,6 +79,7 @@ class RunContext:
     sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
     null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
+    downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
 
 
 _REGISTRY: dict[str, type[Probe]] = {}
