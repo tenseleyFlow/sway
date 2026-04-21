@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### Sprint 06 — CLI & report UX polish
+
+Closes Audit 01 findings D3, D4, D5, D6, D7, D8, D9, D10, D11, D12,
+D13, D14, D15, B16, B17, B18.
+
+- **D3 — extras rollup footer:** terminal + markdown reports now end
+  with a single `pip install 'dlm-sway[...]'` line collecting every
+  extra mentioned in SKIP messages. Single rollup, no per-row scan.
+- **D4 — `sway check` infers `--base`:** reads
+  `base_model_name_or_path` from the adapter's `adapter_config.json`
+  when `--base` is omitted; echoes "(inferred base model: …)" so the
+  user knows what got picked. Falls back to a clear required-flag
+  error when the field is missing.
+- **D5 — `sway autogen` annotates the YAML:** generated specs carry a
+  header block (source `.dlm`, dlm_id, base, adapter, generation
+  timestamp, sway version) and a one-line `# intent` comment above
+  every probe entry. No new dep — pyyaml + a position-based
+  post-processor instead of `ruamel.yaml`.
+- **D6 — `sway run --dry-run` + `sway list-probes`:** dry-run validates
+  the spec, prints a probe table (#, name, kind, category, enabled),
+  and exits 0 without building a backend. `list-probes` prints every
+  shipped probe kind with its category and the first line of its
+  docstring.
+- **D7 — `sway doctor --json`:** machine-readable doctor payload
+  (`sway_version`, `python`, `platform`, `extras`) keyed by extra and
+  module. CI-grep-friendly.
+- **D8 — `dlm_source` resolution warns instead of silently swallowing:**
+  when the spec sets `dlm_source` but the `[dlm]` extra isn't installed
+  (or the bridge errors), the runner emits a yellow stderr warning with
+  the install hint and continues with `sections=None`. No more silent
+  "why are my section probes SKIPping?" debugging.
+- **D9 — markdown column parity with terminal:** the markdown probes
+  table now carries `score`, `raw`, `z`, `duration`, and `note`
+  columns. A `Top findings` section follows the table; a `Skipped
+  probes` section closes when extras are missing.
+- **D10 — unified number formatters:** `format_score`, `format_raw`,
+  `format_z`, `format_duration_s` live in `suite/report.py` and are
+  the only numeric formatters used. Thousands separators above 1 000;
+  `—` glyph for `None` / non-finite. Single source kills cross-surface
+  drift.
+- **D11 — `sway report --format` validated via `StrEnum`:** the
+  Typer-level enum rejects unknown formats with the standard
+  "Invalid value for '--format'" error. No more silent fallback to
+  the terminal renderer on a typo.
+- **D12 — `sway check` verdict banner:** prints
+  `✅ adapter is +4.2σ above noise` (green ≥ 3σ),
+  `⚠️ adapter is +1.5σ above noise — marginal` (yellow ≥ 1σ), or
+  `❌ adapter is +0.3σ — indistinguishable from noise` (red) above
+  the full report. Calibrated on the delta_kl z-score; `check`
+  now runs `null_adapter` first so the z-score is available.
+- **D13 — `sway diff` regression summary:** after per-probe deltas,
+  the diff prints `A→B: N regressed >0.10, M regressed >0.20,
+  composite Δ=±X.XX` color-coded by direction.
+- **D14 — adapter paths with spaces render safely:** `_adapter_label`
+  wraps the path in double quotes when any whitespace is present.
+- **D15 — long messages wrap, don't truncate:** the terminal probe
+  table column uses Rich's `overflow="fold"` instead of an 80-char
+  hard cut with an ellipsis. The full message is always visible.
+- **B16 — single markdown renderer:** `report.from_json` round-trips
+  saved JSON back into the canonical dataclass pair, so
+  `sway report --format md` and `sway run --markdown` both flow
+  through `report.to_markdown` with identical output. The legacy
+  `_render_markdown_from_json` and `_render_junit_from_json` helpers
+  in `cli/commands.py` are deleted.
+- **B17 — `None` scores render as `—`:** the unified formatters cover
+  every render path; no more `0.00` masking missing data.
+- **B18 — `baseline` row labeled `(informational, weight=0)`:** in
+  both terminal and markdown component breakdowns, matching the
+  Sprint 03 explicit-weight-zero decision.
+
 ### Sprint 05 — Probe quality & edge cases
 
 Closes Audit 01 findings B6, B7, B8, B9, B10, B11, B12, B13, B14, B20,
