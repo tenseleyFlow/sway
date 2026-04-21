@@ -123,6 +123,38 @@ class TestDoctorJson:
         assert "httpx" in payload["extras"]["api"]
         assert "tenacity" in payload["extras"]["api"]
 
+    def test_json_schema_is_snapshot_stable(self) -> None:
+        """Stronger-test #11 — pin ``sway doctor --json``'s *shape*
+        (top-level keys + extras bucket keys + their contents as sets of
+        module names). Values (``sway_version``, ``python``, ``platform``,
+        installed vs missing) vary by host and are masked so the snapshot
+        catches structural drift without being environment-sensitive."""
+        result = CliRunner().invoke(app, ["doctor", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+
+        assert set(payload) == {"sway_version", "python", "platform", "extras"}
+        # Every extra bucket's keys are stable; values (module versions)
+        # are not. Snapshot the sorted module-name set per bucket.
+        extras = payload["extras"]
+        assert isinstance(extras, dict)
+        extras_shape = {bucket: sorted(extras[bucket]) for bucket in sorted(extras)}
+        assert extras_shape == {
+            "api": ["httpx", "tenacity"],
+            "dlm": ["dlm"],
+            "hf": ["peft", "torch", "transformers"],
+            "mlx": ["mlx", "mlx_lm"],
+            "pytest": ["pytest"],
+            "semsim": ["sentence_transformers", "sklearn"],
+            "style": ["nlpaug", "spacy", "textstat"],
+            "viz": ["matplotlib", "plotly"],
+        }
+        # Value type is str-or-None on every module entry.
+        for bucket_name, bucket in extras.items():
+            for mod_name, version in bucket.items():
+                assert isinstance(mod_name, str), bucket_name
+                assert version is None or isinstance(version, str), (bucket_name, mod_name)
+
 
 class TestListProbes:
     """D6: ``sway list-probes`` prints the registered kinds."""
