@@ -157,7 +157,9 @@ class TestClusterKL:
 
     def test_uniform_adapter_fallback_to_half(self, monkeyed_embed: dict[str, np.ndarray]) -> None:
         """All prompts shifted identically → zero between-/within-variance
-        → specificity lands on the ``0.5`` fallback (not NaN)."""
+        → specificity lands on the ``0.5`` fallback (not NaN). F17: the
+        degenerate branch returns WARN with a ``degenerate_zero_variance``
+        marker and no z-score, not a spurious calibrated verdict."""
         prompts = [f"p-{i}" for i in range(8)]
         # Split embeddings across two centroids so k-means has a valid
         # partition; the divergence math is what drives the ratio.
@@ -180,6 +182,13 @@ class TestClusterKL:
         assert result.raw == pytest.approx(0.5, abs=1e-6)
         assert result.evidence["within_cluster_variance"] == pytest.approx(0.0)
         assert result.evidence["between_cluster_variance"] == pytest.approx(0.0)
+        # F17: degenerate case gets a WARN verdict + explicit evidence
+        # marker; no z-score is emitted (comparing a conventional 0.5
+        # to a null mean near 0.5 would produce spurious calibration).
+        assert result.verdict == Verdict.WARN
+        assert result.z_score is None
+        assert result.evidence["degenerate_zero_variance"] is True
+        assert "degenerate" in result.message.lower()
 
     def test_too_few_prompts_skips(self, monkeyed_embed: dict[str, np.ndarray]) -> None:
         del monkeyed_embed  # no embedding needed — SKIP short-circuits first
