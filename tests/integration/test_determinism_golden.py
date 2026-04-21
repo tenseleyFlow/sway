@@ -53,7 +53,16 @@ from dlm_sway.suite.runner import run as run_suite
 from dlm_sway.suite.score import compute as compute_score
 from dlm_sway.suite.spec import SwaySpec
 
-pytestmark = [pytest.mark.slow, pytest.mark.online]
+pytestmark = [
+    pytest.mark.slow,
+    pytest.mark.online,
+    # F03 (Audit 03) — macOS CI observed a 20m stall inside
+    # ``snapshot_download`` on a run that normally completes in
+    # ~1m. Hard cap at 10m so a silent network hang fails as a
+    # test (actionable error in the CI log) rather than a
+    # workflow timeout (zero output).
+    pytest.mark.timeout(600),
+]
 
 
 GOLDEN_DIR = Path(__file__).resolve().parents[1] / "golden"
