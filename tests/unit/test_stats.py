@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 
 import numpy as np
-import pytest
 
 from dlm_sway.core.stats import bootstrap_ci
 
@@ -143,6 +142,7 @@ class TestProbeEmitsCi95:
         ctx = RunContext(backend=backend)
         result = probe.run(spec, ctx)
         assert result.ci_95 is not None
+        assert result.raw is not None
         lo, hi = result.ci_95
         assert lo <= result.raw <= hi
         # Evidence payload carries the same interval as a list.
