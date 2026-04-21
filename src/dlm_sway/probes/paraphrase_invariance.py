@@ -29,6 +29,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._zscore import (
     no_calibration_note,
     score_from_z,
@@ -136,6 +137,7 @@ class ParaphraseInvarianceProbe(Probe):
             )
 
         mean_verb = statistics.fmean(verbatim_lifts)
+        ci_95 = bootstrap_ci(verbatim_lifts, seed=ctx.seed)
         mean_par = statistics.fmean(paraphrase_lifts)
         ratio = mean_par / mean_verb if abs(mean_verb) > 1e-9 else 0.0
 
@@ -177,8 +179,10 @@ class ParaphraseInvarianceProbe(Probe):
                 "per_case": per_case[:8],
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=msg,
+            ci_95=ci_95,
         )
 
 

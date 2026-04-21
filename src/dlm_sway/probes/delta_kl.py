@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._divergence import Divergence, divergence, js_ln2
 from dlm_sway.probes._zscore import (
     no_calibration_note,
@@ -93,6 +94,10 @@ class DeltaKLProbe(Probe):
 
         raw_mean = statistics.fmean(divergences)
         raw_max = max(divergences)
+        # S14 F9: bootstrap CI on the mean so the report surfaces
+        # sampling noise around the point estimate. Seeded from ctx
+        # so the interval is reproducible across runs.
+        ci_95 = bootstrap_ci(divergences, seed=ctx.seed)
 
         # Null-adapter calibration wins when available.
         stats = get_null_stats(ctx, spec.kind)
@@ -129,6 +134,8 @@ class DeltaKLProbe(Probe):
                 "num_prompts": len(spec.prompts),
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=message,
+            ci_95=ci_95,
         )

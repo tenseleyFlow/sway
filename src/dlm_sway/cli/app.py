@@ -49,6 +49,7 @@ app.command("autogen")(commands.autogen_cmd)
 app.command("doctor")(commands.doctor_cmd)
 app.command("report")(commands.report_cmd)
 app.command("compare")(commands.compare_cmd)
+app.command("trace")(commands.trace_cmd)
 app.command("list-probes")(commands.list_probes_cmd)
 
 

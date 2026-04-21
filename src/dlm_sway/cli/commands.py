@@ -712,6 +712,67 @@ def compare_cmd(
             raise typer.Exit(code=1)
 
 
+class TraceFormat(StrEnum):
+    """Allowed values for ``sway trace --format``."""
+
+    TERMINAL = "terminal"
+    MARKDOWN = "md"
+    MARKDOWN_LONG = "markdown"  # alias kept for muscle memory
+    JSON = "json"
+
+
+def trace_cmd(
+    trace_file: Annotated[
+        Path,
+        typer.Argument(
+            help=("Path to a forward-pass trace JSONL produced by `sway run --trace <path>`."),
+        ),
+    ],
+    format: Annotated[
+        TraceFormat,
+        typer.Option(
+            "--format",
+            help="Output format: terminal, md (alias: markdown), or json.",
+        ),
+    ] = TraceFormat.TERMINAL,
+    slowest: Annotated[
+        int,
+        typer.Option(
+            "--slowest",
+            help="How many slowest-events rows to show. 0 hides that table.",
+        ),
+    ] = 10,
+) -> None:
+    """Analyze a forward-pass trace JSONL.
+
+    Reads the per-event JSONL `sway run --trace` writes, aggregates
+    into per-probe + per-view summaries, and surfaces the top-N
+    slowest events. Intended for suite-performance investigation:
+    point at a captured trace and see which probe × view pair
+    dominated wall time, whether the S07 cache helped, and which
+    individual prompts took the longest.
+    """
+    from dlm_sway.suite import trace_analysis
+
+    try:
+        events = trace_analysis.load(trace_file)
+    except OSError as exc:
+        typer.echo(f"sway trace: cannot read {trace_file}: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    if not events:
+        typer.echo(f"sway trace: no events in {trace_file}", err=True)
+        raise typer.Exit(code=1)
+
+    report = trace_analysis.build_report(events, slowest_k=max(0, slowest))
+
+    if format is TraceFormat.JSON:
+        typer.echo(trace_analysis.render_json(report))
+    elif format in (TraceFormat.MARKDOWN, TraceFormat.MARKDOWN_LONG):
+        typer.echo(trace_analysis.render_markdown(report))
+    else:
+        trace_analysis.render_terminal(report, console=Console())
+
+
 # -- helpers -----------------------------------------------------------
 
 

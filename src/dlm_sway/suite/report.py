@@ -76,6 +76,16 @@ def format_z(v: float | int | None) -> str:
     return f"{float(v):+,.2f}σ"
 
 
+def format_ci(ci: tuple[float, float] | None) -> str:
+    """Percentile-bootstrap 95% CI as ``[lo, hi]``; ``—`` on None / non-finite."""
+    if ci is None:
+        return _NONE_GLYPH
+    lo, hi = ci
+    if not (math.isfinite(float(lo)) and math.isfinite(float(hi))):
+        return _NONE_GLYPH
+    return f"[{float(lo):.3f}, {float(hi):.3f}]"
+
+
 def _message_with_rank_profile(r: ProbeResult) -> str:
     """Append the per-rank z-profile to a probe's message when present.
 
@@ -175,6 +185,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
     detail.add_column("verdict")
     detail.add_column("score", justify="right")
     detail.add_column("raw", justify="right")
+    detail.add_column("ci95", justify="right", style="dim")
     detail.add_column("z", justify="right")
     # D15: let Rich wrap long messages instead of hard-truncating at 80
     # chars with an ellipsis. ``overflow="fold"`` + ``no_wrap=False``
@@ -187,6 +198,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             Text(r.verdict.value, style=_VERDICT_STYLE[r.verdict]),
             format_score(r.score),
             format_raw(r.raw),
+            format_ci(r.ci_95),
             format_z(r.z_score),
             Text(_message_with_rank_profile(r)),
         )
@@ -276,6 +288,9 @@ def _probe_to_jsonable(r: ProbeResult) -> dict[str, Any]:
         "evidence": r.evidence,
         "message": r.message,
         "duration_s": r.duration_s,
+        # S14: bootstrap 95% CI on ``raw``. Serialized as a two-list
+        # [lo, hi] so JSON stays tuple-free (match numpy convention).
+        "ci_95": list(r.ci_95) if r.ci_95 is not None else None,
     }
 
 
@@ -307,6 +322,15 @@ def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
         # well-defined zero so wall-time displays as 0.00s.
         return datetime.fromtimestamp(0).astimezone()
 
+    def _ci_95(v: Any) -> tuple[float, float] | None:
+        if v is None:
+            return None
+        try:
+            lo, hi = v
+            return (float(lo), float(hi))
+        except (TypeError, ValueError):
+            return None
+
     probes = tuple(
         ProbeResult(
             name=p["name"],
@@ -320,6 +344,7 @@ def from_json(raw: dict[str, Any]) -> tuple[SuiteResult, SwayScore]:
             evidence=dict(p.get("evidence") or {}),
             message=p.get("message", ""),
             duration_s=float(p.get("duration_s", 0.0)),
+            ci_95=_ci_95(p.get("ci_95")),
         )
         for p in raw.get("probes", [])
     )
@@ -427,8 +452,8 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     # below so CI log consumers can see them without opening the JSON.
     buf.write("\n## Probes\n\n")
     buf.write(
-        "| name | kind | verdict | score | raw | z | duration | note |\n"
-        "|---|---|---|---:|---:|---:|---:|---|\n"
+        "| name | kind | verdict | score | raw | ci95 | z | duration | note |\n"
+        "|---|---|---|---:|---:|---:|---:|---:|---|\n"
     )
     for r in suite.probes:
         # Escape pipes in messages so markdown doesn't treat them as
@@ -436,7 +461,8 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         note = _message_with_rank_profile(r).replace("|", "\\|").replace("\n", " ").strip()
         buf.write(
             f"| {r.name} | `{r.kind}` | {r.verdict.value} | "
-            f"{format_score(r.score)} | {format_raw(r.raw)} | {format_z(r.z_score)} | "
+            f"{format_score(r.score)} | {format_raw(r.raw)} | "
+            f"{format_ci(r.ci_95)} | {format_z(r.z_score)} | "
             f"{format_duration_s(r.duration_s)} | {note} |\n"
         )
 

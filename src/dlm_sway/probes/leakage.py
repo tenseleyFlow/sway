@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._zscore import (
     no_calibration_note,
     score_from_z,
@@ -162,6 +163,7 @@ class LeakageSusceptibilityProbe(Probe):
         mean_clean = statistics.fmean(clean_recalls)
         mean_pert = statistics.fmean(perturbed_recalls)
         mean_fragility = _fragility(mean_clean, mean_pert)
+        ci_95 = bootstrap_ci(clean_recalls, seed=ctx.seed)
 
         # Lower-is-better: negate the z so that "σ less leakage than null"
         # yields a positive z against the shared ``z >= threshold`` rule.
@@ -209,8 +211,10 @@ class LeakageSusceptibilityProbe(Probe):
                 "per_section": per_section[:10],
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=message,
+            ci_95=ci_95,
         )
 
 

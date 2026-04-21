@@ -20,6 +20,7 @@
   "probes": [
     {
       "base_value": null,
+      "ci_95": null,
       "duration_s": 0.123,
       "evidence": {
         "divergence_kind": "js",
@@ -37,6 +38,7 @@
     },
     {
       "base_value": null,
+      "ci_95": null,
       "duration_s": 0.456,
       "evidence": {
         "num_sections": 4,
@@ -54,6 +56,7 @@
     },
     {
       "base_value": null,
+      "ci_95": null,
       "duration_s": 0.001,
       "evidence": {},
       "ft_value": null,
@@ -67,6 +70,7 @@
     },
     {
       "base_value": null,
+      "ci_95": null,
       "duration_s": 0.0,
       "evidence": {},
       "ft_value": null,

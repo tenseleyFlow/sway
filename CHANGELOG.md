@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+### Sprint 14 — Bootstrap CIs + forward-pass trace CLI
+
+Closes Audit 01 innovation items F9 (bootstrap confidence intervals
+on raw metrics) + F12 (polished forward-pass trace CLI). Paired
+sharpenings of existing probe output and existing trace
+infrastructure.
+
+- **New `core/stats.bootstrap_ci`** — percentile-bootstrap 95% CI on
+  any sequence of per-sample measurements. Numpy-only, 1000-resample
+  default, seeded from ``ctx.seed`` so intervals are reproducible.
+  Short-circuits on non-finite / empty / degenerate-constant inputs;
+  vectorized resample keeps the overhead ~1 ms per probe.
+- **`ProbeResult.ci_95: tuple[float, float] | None`** — new field,
+  threaded through `safe_finalize` (nulled if `raw` is nulled, so a
+  CI never brackets a defensive-null point estimate). `to_json` /
+  `from_json` persist the pair as a two-list.
+- **Six aggregating probes emit `ci_95`:** `delta_kl` (over per-prompt
+  divergences), `calibration_drift` (over per-item regression
+  indicators), `external_perplexity` (over per-chunk deltas),
+  `leakage` (over clean-recall rates), `paraphrase_invariance` (over
+  verbatim lifts), `section_internalization` (over effective SIS
+  scores). Each also lands the interval under
+  ``evidence["raw_ci_95"]`` for JSON consumers.
+- **Report tables add a `ci95` column** between `raw` and `z` in
+  both terminal and markdown output. `format_ci` renders as
+  ``[lo, hi]`` with em-dash for missing/non-finite. Markdown
+  snapshot refreshed; JSON snapshot refreshed for the new
+  per-probe `ci_95` field.
+- **New `sway trace <jsonl>` CLI.** Reads the forward-pass trace
+  JSONL the S07 runner writes when `--trace <path>` is set,
+  aggregates into per-probe and per-view wall-time + hit-rate
+  tables, plus a top-N slowest-events table. `--format
+  terminal|md|json`, `--slowest K` to tune the tail size. The
+  parsing tolerates old trace shapes (missing `probe` / `hit`
+  fields) and skips malformed lines.
+- **`suite/trace_analysis`** — typed dataclasses (`TraceEvent`,
+  `ProbeSummary`, `ViewSummary`, `TraceReport`) + three renderers
+  (terminal / markdown / json) matching the conventions of
+  `suite/report` and `suite/compare`.
+- **Committed trace fixture** at `tests/fixtures/trace_sample.jsonl`
+  (8 events, 2 probes × 4 prompts with cache hits). Drives 22 new
+  trace-analysis + CLI tests.
+- **Prove-the-value (F9):** on a dummy backend with per-prompt
+  variation, `delta_kl`'s CI narrows from `[0.33, 0.41]` (width
+  0.079) at N=4 prompts to `[0.38, 0.42]` (width 0.044) at N=32 —
+  1.8× tighter in width, tracking the √(N₂/N₁) ≈ 2.8× theoretical
+  scaling minus dummy-backend dispersion.
+- **Prove-the-value (F12):** the CLI's terminal output on the
+  committed fixture correctly identifies `sis/base` (520.3 ms) as
+  the single slowest event, `sis` (1,529 ms) as the slower probe
+  over `dk` (529 ms), and `ft` (1,357 ms) as the slower view over
+  `base` (701 ms).
+
 ### Sprint 13 — OpenAI-compatible HTTP scoring backend
 
 Closes Audit 01 innovation item F7. Unlocks sway against hosted
