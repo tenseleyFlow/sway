@@ -124,7 +124,7 @@ def pytest_collection_modifyitems(config: Config, items: list[Item]) -> None:
             new_items.append(item)
             continue
         try:
-            spec_path, threshold, weights = _parse_mark(mark)
+            spec_path, threshold, weights = _parse_mark(mark, rootpath=config.rootpath)
         except _SwayMarkError as exc:
             # Surface the configuration error as a single failed item
             # so the user sees a green-field message in pytest's
@@ -159,6 +159,8 @@ class _SwayMarkError(Exception):
 
 def _parse_mark(
     mark: pytest.Mark,
+    *,
+    rootpath: Path,
 ) -> tuple[Path, float, dict[str, float] | None]:
     """Pull ``(spec_path, threshold, weights)`` out of a ``@pytest.mark.sway(...)``."""
     # ``mark.args`` + ``mark.kwargs`` together give the call shape.
@@ -174,10 +176,11 @@ def _parse_mark(
         raise _SwayMarkError("@pytest.mark.sway requires a `spec` kwarg or a positional spec path")
     spec_path = Path(spec)
     if not spec_path.is_absolute():
-        # Resolve against the config rootpath — the project root pytest
-        # discovers, the same one users edit from. Means the spec can
-        # sit next to the test file without a full absolute path.
-        spec_path = spec_path.resolve()
+        # Resolve against pytest's rootpath — the project root pytest
+        # discovers — not the process cwd. A user running ``pytest
+        # tests/`` from a subdir would otherwise see spec-relative
+        # paths resolved against the subdir, surprising.
+        spec_path = (rootpath / spec_path).resolve()
 
     threshold_raw = kwargs.pop("threshold", 0.0)
     try:
