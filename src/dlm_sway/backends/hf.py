@@ -257,6 +257,11 @@ class HuggingFaceDifferentialBackend:
     these actually change logits on a fixture.
     """
 
+    #: B19 — the shared-weights toggle is not thread-safe. The runner
+    #: treats ``spec.defaults.concurrent_probes > 1`` as a no-op when
+    #: this attribute is ``False``. See ``.docs/design/backend-concurrency.md``.
+    safe_for_concurrent_views: bool = False
+
     def __init__(self, *, base_spec: ModelSpec, adapter_path: Path) -> None:
         torch, transformers, peft = _require_hf()
         self._torch = torch

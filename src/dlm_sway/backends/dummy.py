@@ -243,11 +243,17 @@ class DummyDifferentialBackend:
     exit one view before entering the other, catching bugs in probes
     that hold a stale view across a toggle.
 
+    Dummy declares ``safe_for_concurrent_views = False`` to mirror the
+    shipped backends' posture; tests that want to exercise the concurrent
+    scheduling path can subclass and set it ``True``.
+
     Also implements
     :class:`~dlm_sway.core.scoring.ScalableDifferentialBackend` with a
     linear-blend between base and ft responses, so probes that need
     ``as_scaled_adapter`` (N2 AdapterAblation) are unit-testable.
     """
+
+    safe_for_concurrent_views: bool = False
 
     def __init__(self, *, base: DummyResponses, ft: DummyResponses) -> None:
         self._base_r = base

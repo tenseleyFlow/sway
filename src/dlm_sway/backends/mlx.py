@@ -189,6 +189,12 @@ class MLXDifferentialBackend:
     this is acceptable.
     """
 
+    #: MLX holds two distinct model objects — threading against them
+    #: is still unsafe today because the ``_active`` flag is single-slot
+    #: and ``mlx_lm`` isn't documented as thread-safe. False by default;
+    #: see ``.docs/design/backend-concurrency.md``.
+    safe_for_concurrent_views: bool = False
+
     def __init__(self, *, base_spec: ModelSpec, adapter_path: Path) -> None:
         mx, mlx_lm = _require_mlx()
         self._mx = mx

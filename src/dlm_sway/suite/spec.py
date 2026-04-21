@@ -40,6 +40,17 @@ class SuiteDefaults(BaseModel):
     backend can't do in-place toggling."""
     coverage_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.6
     """Minimum composite score for ``sway gate`` to pass."""
+    concurrent_probes: Annotated[int, Field(ge=1, le=32)] = 1
+    """Maximum number of independent probes to dispatch concurrently.
+
+    **Default is 1 (sequential).** Values > 1 are respected only when
+    the backend declares
+    :attr:`~dlm_sway.core.scoring.DifferentialBackend.safe_for_concurrent_views`
+    as ``True`` — which no shipped backend does in v0.1 (see
+    ``.docs/design/backend-concurrency.md`` / B19). The flag exists so
+    custom backends that *are* already concurrency-safe (e.g. a
+    stateless hosted-API backend) can opt in without waiting for the
+    HF backend fix; shipped backends treat it as a no-op."""
     score_weights: dict[str, float] | None = None
     """Per-category weight overrides for the composite score. ``None``
     uses :data:`dlm_sway.core.result.DEFAULT_COMPONENT_WEIGHTS`. Keys

@@ -57,6 +57,23 @@ def run(
     """
     started = utcnow()
 
+    # Sprint 07: concurrent_probes is scaffolding. The HF and MLX
+    # backends declare ``safe_for_concurrent_views = False`` so the
+    # runner stays sequential below. When a future sprint builds the
+    # pool (see ``.docs/design/backend-concurrency.md``), flip the
+    # check to dispatch here; the spec field is already validated.
+    requested = spec.defaults.concurrent_probes
+    backend_safe = getattr(backend, "safe_for_concurrent_views", False)
+    if requested > 1 and not backend_safe:
+        import sys as _sys
+
+        print(
+            f"warning: spec requested concurrent_probes={requested} but "
+            f"{type(backend).__name__} is not concurrency-safe — running "
+            f"sequentially (see .docs/design/backend-concurrency.md)",
+            file=_sys.stderr,
+        )
+
     # Seed every RNG sway's probes touch before any backend work runs.
     # ``strict=True`` asks torch for deterministic algorithms and sets
     # CUBLAS_WORKSPACE_CONFIG; this is a no-op when torch is absent, so
