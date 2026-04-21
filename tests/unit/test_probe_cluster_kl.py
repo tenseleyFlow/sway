@@ -71,9 +71,7 @@ def monkeyed_embed(monkeypatch: pytest.MonkeyPatch) -> dict[str, np.ndarray]:
     return table
 
 
-def _two_topic_backend(
-    topic_a: list[str], topic_b: list[str]
-) -> DummyDifferentialBackend:
+def _two_topic_backend(topic_a: list[str], topic_b: list[str]) -> DummyDifferentialBackend:
     """Base is sharp on all prompts. ft is broad on topic A (high KL) and
     sharp on topic B (near-zero KL). Produces a strong per-topic signal.
     """
@@ -140,9 +138,7 @@ class TestClusterKL:
         assert hi > 0.1, f"expected high-cluster mean > 0.1; got {per_cluster}"
         assert lo < 0.01, f"expected low-cluster mean < 0.01; got {per_cluster}"
 
-    def test_uniform_adapter_fallback_to_half(
-        self, monkeyed_embed: dict[str, np.ndarray]
-    ) -> None:
+    def test_uniform_adapter_fallback_to_half(self, monkeyed_embed: dict[str, np.ndarray]) -> None:
         """All prompts shifted identically → zero between-/within-variance
         → specificity lands on the ``0.5`` fallback (not NaN)."""
         prompts = [f"p-{i}" for i in range(8)]
@@ -179,7 +175,9 @@ class TestClusterKL:
                 "min_prompts": 10,
             }
         )
-        ctx = RunContext(backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses()))
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.SKIP
         assert "≥10" in result.message
@@ -188,7 +186,9 @@ class TestClusterKL:
         probe, spec = build_probe(
             {"name": "ck", "kind": "cluster_kl", "prompts": [], "min_prompts": 4}
         )
-        ctx = RunContext(backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses()))
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.ERROR
 
@@ -204,7 +204,9 @@ class TestClusterKL:
                 "min_prompts": 4,
             }
         )
-        ctx = RunContext(backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses()))
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.SKIP
         assert "num_clusters=3" in result.message
@@ -262,7 +264,9 @@ class TestMissingSemsim:
             num_clusters=2,
             min_prompts=4,
         )
-        ctx = RunContext(backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses()))
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.SKIP
         assert "semsim" in result.message
