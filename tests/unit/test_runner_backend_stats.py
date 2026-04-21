@@ -104,6 +104,60 @@ def test_trace_writer_produces_jsonl(tmp_path: Path) -> None:
     assert any(not line["hit"] for line in lines)
 
 
+def test_trace_roundtrip_matches_backend_stats(tmp_path: Path) -> None:
+    """F09 regression — trace writer and analyzer share the same schema.
+
+    The writer lives in ``backends/_instrumentation`` and the analyzer
+    lives in ``suite/trace_analysis``. They aren't linked by a shared
+    type. A writer-side field removal would parse cleanly in the
+    analyzer (everything is ``Optional``) and silently roll up every
+    event under ``<unassigned>``. This test runs a real suite with
+    ``trace_path=`` set, loads the file back, and asserts the loaded
+    events are consistent with the backend_stats counters produced by
+    the same run.
+    """
+    from dlm_sway.suite.trace_analysis import load as load_trace
+
+    trace_path = tmp_path / "trace.jsonl"
+    backend = _programmable_backend()
+    result = run_suite(_spec_with_repeated_prompts(), backend, trace_path=trace_path)
+
+    events = load_trace(trace_path)
+    assert events, "trace writer produced no events"
+    # Probe-scoped events must tag with their probe name. Pre-probe
+    # preflight events legitimately carry ``probe=None``; we split the
+    # stream and hold the probe-tagged subset to the stricter invariant.
+    probe_tagged = [e for e in events if e.probe is not None]
+    assert probe_tagged, "no probe-tagged events — writer dropped the probe field"
+    # dk1 + dk2 are the only two probes; both should surface.
+    probe_labels = {e.probe for e in probe_tagged}
+    assert probe_labels == {"dk1", "dk2"}
+    # base + ft are the only two views touched by delta_kl.
+    view_ids = {e.view_id for e in probe_tagged}
+    assert view_ids == {"base", "ft"}
+
+    # Trace hit-rate must match backend_stats hit-rate to within
+    # integer counts. ``backend_stats`` aggregates *every* cache
+    # access the instrumented backend saw during the run, including
+    # the pre-probe preflight call (which carries ``probe=None`` in
+    # the trace). Compare against the full event list, not just the
+    # probe-tagged subset.
+    stats = result.backend_stats
+    traced_hits = sum(1 for e in events if e.hit)
+    traced_misses = sum(1 for e in events if not e.hit)
+    assert traced_hits == stats["cache_hits"], (
+        f"trace says {traced_hits} hits; backend_stats says {stats['cache_hits']}. "
+        "Writer/analyzer schemas have drifted."
+    )
+    assert traced_misses == stats["cache_misses"]
+    # Every event carries the four fields the analyzer reads; a writer
+    # that dropped ``op`` or ``wall_ms`` would parse cleanly (both are
+    # required-but-defaulted on the dataclass) and roll up under empty
+    # buckets — this assertion catches that silent mode.
+    assert all(e.op == "next_token_dist" for e in events)
+    assert all(e.wall_ms >= 0.0 for e in events)
+
+
 def test_ci_95_survives_runner_roundtrip() -> None:
     """F01 regression — ``_with_duration`` must forward every field.
 
