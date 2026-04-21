@@ -1,5 +1,6 @@
 {
   "adapter_id": "/fixture/runs/adapter/v0003",
+  "backend_stats": {},
   "base_model_id": "HuggingFaceTB/SmolLM2-135M-Instruct",
   "determinism": {
     "class": "best_effort",
