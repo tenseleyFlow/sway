@@ -107,7 +107,21 @@ class TestDoctorJson:
         assert "platform" in payload
         assert "extras" in payload
         # Every extra bucket is a mapping of module → version-or-null.
-        assert set(payload["extras"]) >= {"hf", "mlx", "semsim", "style", "dlm", "viz"}
+        assert set(payload["extras"]) >= {
+            "hf",
+            "mlx",
+            "semsim",
+            "style",
+            "dlm",
+            "viz",
+            "api",
+            "pytest",
+        }
+        # F04 regression: load-bearing deps appear under the right extras.
+        assert "plotly" in payload["extras"]["viz"]
+        assert "sklearn" in payload["extras"]["semsim"]
+        assert "httpx" in payload["extras"]["api"]
+        assert "tenacity" in payload["extras"]["api"]
 
 
 class TestListProbes:
