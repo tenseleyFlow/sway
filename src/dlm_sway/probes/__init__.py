@@ -16,6 +16,7 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     adapter_ablation,
     adapter_revert,
     calibration_drift,
+    cluster_kl,
     delta_kl,
     external_perplexity,
     leakage,
