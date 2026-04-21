@@ -181,3 +181,25 @@ def build_probe(raw: dict[str, Any]) -> tuple[Probe, ProbeSpec]:
     except ValidationError as exc:
         raise SpecValidationError(str(exc), source=str(raw.get("name", "<unknown>"))) from exc
     return probe_cls(), spec
+
+
+def validate_all_probes(suite: list[dict[str, Any]]) -> None:
+    """Run :func:`build_probe` against every entry; collect all errors.
+
+    The runner / CLI calls this before constructing the backend (which
+    is the slow, network-touching step). A typo in any ``kind:`` field
+    therefore surfaces before any model is loaded — and *every* typo
+    in the spec surfaces in a single error message instead of
+    forcing the user to fix one, re-run, fix the next, re-run (B7).
+    """
+    errors: list[str] = []
+    for idx, raw in enumerate(suite):
+        try:
+            build_probe(raw)
+        except SpecValidationError as exc:
+            label = raw.get("name") or f"entry #{idx}"
+            errors.append(f"  - {label}: {exc}")
+    if errors:
+        raise SpecValidationError(
+            "spec contains invalid probe entries:\n" + "\n".join(errors)
+        )
