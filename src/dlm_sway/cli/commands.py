@@ -383,12 +383,38 @@ def diff_cmd(
     console.print(f"[bold]overall[/bold]  A: {overall_a:.2f}   B: {overall_b:.2f}")
     console.print()
     console.print("[bold]per-probe[/bold] (A → B, Δ):")
+    regressed_small = 0  # |Δ| > 0.10 in the wrong direction
+    regressed_large = 0  # |Δ| > 0.20 in the wrong direction
     for name in sorted(per_a.keys() | per_b.keys()):
         a = per_a.get(name, 0.0)
         b = per_b.get(name, 0.0)
         delta = b - a
         sign = "+" if delta >= 0 else ""
         console.print(f"  {name:<30}  {a:.2f}  →  {b:.2f}   ({sign}{delta:+.2f})")
+        if delta < -0.10:
+            regressed_small += 1
+        if delta < -0.20:
+            regressed_large += 1
+
+    # D13: regression summary line. The audit's example phrasing was
+    # "A→B: 3 probes regressed >0.10, 1 regressed >0.20, composite Δ=+0.02".
+    # Color cue tracks the composite delta: green for any improvement,
+    # red on regression, yellow on flat-with-regressions.
+    composite_delta = overall_b - overall_a
+    if composite_delta > 0.0:
+        summary_style = "bold green"
+    elif regressed_small or regressed_large:
+        summary_style = "bold red" if composite_delta < 0.0 else "bold yellow"
+    else:
+        summary_style = "dim"
+
+    console.print()
+    console.print(
+        f"A→B: {regressed_small} probe(s) regressed >0.10, "
+        f"{regressed_large} regressed >0.20, "
+        f"composite Δ={composite_delta:+.2f}",
+        style=summary_style,
+    )
 
 
 def autogen_cmd(
