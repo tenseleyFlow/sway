@@ -182,13 +182,16 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
         )
     )
 
-    # Component breakdown
+    # Component breakdown. Order matches ``DEFAULT_COMPONENT_WEIGHTS``
+    # (the extensibility point) and appends any categories present in
+    # ``score.components`` but not in the default weights — so a custom
+    # Probe subclass with a new category still renders.
     comp_table = Table.grid(padding=(0, 2))
     comp_table.add_column(justify="left")
     comp_table.add_column(justify="right")
     comp_table.add_column()
     comp_table.add_column(style="dim")
-    for cat in ("adherence", "attribution", "calibration", "ablation", "baseline"):
+    for cat in _category_order(score):
         if cat not in score.components:
             continue
         v = score.components[cat]
@@ -480,7 +483,10 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
 
     buf.write("## Components\n\n")
     buf.write("| category | score | weight | |\n|---|---:|---:|---|\n")
-    for cat, v in score.components.items():
+    for cat in _category_order(score):
+        if cat not in score.components:
+            continue
+        v = score.components[cat]
         weight = score.weights.get(cat, 0.0)
         label = "(informational, weight=0)" if weight == 0.0 else ""
         buf.write(f"| {cat} | {format_score(v)} | {format_score(weight)} | {label} |\n")
@@ -532,6 +538,27 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
 
 
 # -- helpers -----------------------------------------------------------
+
+
+def _category_order(score: SwayScore) -> list[str]:
+    """Unified render order for component categories.
+
+    Falls back through two sources, in priority order:
+
+    1. Keys of :data:`core.result.DEFAULT_COMPONENT_WEIGHTS` — the
+       canonical category list every first-party probe slots into.
+    2. Any category present in ``score.components`` that isn't in the
+       default weights — so a custom :class:`Probe` subclass declaring
+       a brand-new category still renders (F16).
+
+    Keeps the renderer loop in terminal + markdown identical so future
+    additions flow through both surfaces without a second code path.
+    """
+    from dlm_sway.core.result import DEFAULT_COMPONENT_WEIGHTS
+
+    order: list[str] = list(DEFAULT_COMPONENT_WEIGHTS.keys())
+    order.extend(cat for cat in score.components if cat not in DEFAULT_COMPONENT_WEIGHTS)
+    return order
 
 
 def _cache_line(suite: SuiteResult) -> str | None:
