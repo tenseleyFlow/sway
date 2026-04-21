@@ -57,6 +57,27 @@ def build(base_spec: ModelSpec, *, adapter_path: Path | None = None) -> Differen
 
         return MLXDifferentialBackend(base_spec=base_spec, adapter_path=effective_adapter)
 
+    if base_spec.kind == "api":
+        # An API backend represents ONE endpoint — it has no local
+        # model toggle. The idiomatic path is
+        # ``defaults.differential: false`` in sway.yaml, which routes
+        # through :func:`build_two_separate`; that calls this dispatch
+        # twice (once per side) and wraps the results in
+        # :class:`TwoModelDifferential`. The ``adapter:`` field is
+        # ignored — "adapter" for an API backend is a *different
+        # model name*, not a local file path.
+        if base_spec.endpoint is None:
+            raise SpecValidationError(
+                "api backend requires `endpoint:` on the ModelSpec "
+                "(the base URL of the /v1/completions server)"
+            )
+        from dlm_sway.backends.api import ApiScoringBackend
+
+        return ApiScoringBackend(
+            base_url=base_spec.endpoint,
+            model_name=base_spec.base,
+        )
+
     if base_spec.kind == "custom":
         return _load_custom(base_spec, effective_adapter)
 
