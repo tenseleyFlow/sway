@@ -31,6 +31,7 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.core.scoring import ScoringBackend
 from dlm_sway.core.sections import Section, SectionKind
 from dlm_sway.probes._zscore import (
@@ -146,6 +147,7 @@ class SectionInternalizationProbe(Probe):
 
         passing_frac = passing / len(eligible)
         raw_mean = statistics.fmean(effective_scores)
+        ci_95 = bootstrap_ci(effective_scores, seed=ctx.seed)
 
         # Null-adapter calibration wins when available.
         stats = get_null_stats(ctx, spec.kind)
@@ -185,8 +187,10 @@ class SectionInternalizationProbe(Probe):
                 "per_section_threshold": spec.per_section_threshold,
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=message,
+            ci_95=ci_95,
         )
 
 
