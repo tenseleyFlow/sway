@@ -111,3 +111,37 @@ def test_roundtrip_toggle_restores_base(tiny_model_dir: Path, random_adapter: Pa
         np.testing.assert_allclose(first, second, rtol=1e-5, atol=1e-6)
     finally:
         backend.close()
+
+
+def test_disable_re_enable_bit_identical_logits(
+    tiny_model_dir: Path, random_adapter: Path
+) -> None:
+    """B15 mitigation: ft → base → ft produces bit-identical ft logits.
+
+    Subtle state corruption inside ``disable_adapter()`` (e.g. a wrong
+    re-attach order on context exit) would silently shift the second ft
+    pass by an immeasurably small amount that ``assert_allclose``
+    tolerates but ``assert_array_equal`` doesn't. Pin the stricter claim
+    on fp32 + CPU so the test stays deterministic across hosts.
+    """
+    import numpy as np
+
+    backend = HuggingFaceDifferentialBackend(
+        base_spec=ModelSpec(base=str(tiny_model_dir), kind="hf", dtype="fp32", device="cpu"),
+        adapter_path=random_adapter,
+    )
+    try:
+        prompt = "the disable_adapter contract is"
+        with backend.as_finetuned() as f:
+            first = np.array(f.next_token_dist(prompt, top_k=32).logprobs, copy=True)
+        with backend.as_base() as b:
+            b.next_token_dist(prompt, top_k=32)  # toggle through base
+        with backend.as_finetuned() as f:
+            second = np.array(f.next_token_dist(prompt, top_k=32).logprobs, copy=True)
+        np.testing.assert_array_equal(
+            first,
+            second,
+            err_msg="ft logits drifted across a base toggle — disable_adapter exit may have corrupted the adapter state (B15)",
+        )
+    finally:
+        backend.close()
