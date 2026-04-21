@@ -2,6 +2,62 @@
 
 ## Unreleased
 
+### Sprint 13 — OpenAI-compatible HTTP scoring backend
+
+Closes Audit 01 innovation item F7. Unlocks sway against hosted
+fine-tunes — OpenAI platform, `vllm serve`, Ollama — without
+requiring a local torch + PEFT load.
+
+- **New backend `ApiScoringBackend`** (`backends/api.py`): scores
+  against a ``/v1/completions`` endpoint via httpx. Implements
+  `ScoringBackend` only (not `DifferentialBackend`) since one
+  endpoint is one model; users compose two `ApiScoringBackend`
+  instances behind the existing `TwoModelDifferential` wrapper for
+  a full differential run. Method surface: `logprob_of` via
+  `echo=True`+`logprobs=0`, `rolling_logprob` via the same,
+  `next_token_dist` via `max_tokens=1`+`logprobs=K`, plus
+  `preflight_finite_check` and an `ApiScoringBackend.generate` for
+  probes that need text output (e.g. `leakage`).
+- **Token-boundary handling.** The API returns tokens as strings, so
+  `logprob_of` walks the echoed tokens by character length until the
+  running total covers the prompt, then sums the rest. When the
+  boundary falls mid-token, the partial token lands on the prompt
+  side — over-counts the prompt, under-attributes to the completion
+  — and the behavior is asserted by a dedicated test
+  (`test_mid_token_prompt_leans_conservative`).
+- **Retry + preflight.** Tenacity handles 5xx + network errors with
+  exponential backoff (configurable `max_retries`). Preflight hits
+  the endpoint once with `hello`, `max_tokens=1`, `logprobs=1`;
+  rejects non-finite logprobs before the suite runs.
+- **First backend with `safe_for_concurrent_views=True`.** HTTP is
+  stateless, so the S07 concurrent-probe scheduler can dispatch
+  against an API backend in parallel as soon as the pool
+  implementation lands (still scaffolding in the runner).
+- **`ModelSpec` additions:** `BackendKind` gains `"api"`;
+  `ModelSpec.endpoint` field carries the server's base URL (the
+  `/v1/completions` path is appended by the backend). API key from
+  `SWAY_API_KEY` → `OPENAI_API_KEY` env var fallback, so secrets
+  stay out of the YAML.
+- **`backends.build` dispatch** routes `kind="api"` to
+  `ApiScoringBackend`. Combined with `build_two_separate` +
+  `TwoModelDifferential`, a YAML with
+  `defaults.differential: false` and two `kind: api` models Just
+  Works end-to-end.
+- **New `[api]` extra** — `httpx>=0.27` + `tenacity>=9.0`. Core sway
+  stays torch-free; the `[api]` extra adds ~1 MB of deps vs the
+  `[hf]` extra's 3 GB.
+- **Unit tests (21 new) use httpx's `MockTransport`** to intercept
+  every call and assert numeric outputs match canned OpenAI-shaped
+  responses — covers all three scoring methods, cache dedup, 4xx
+  error surfacing, 503→200 retry recovery, API-key env fallback,
+  NaN-response preflight rejection, and the token-boundary math.
+- **Prove-the-value (§F7):** `tests/integration/test_api_ollama.py`
+  is opt-in via `SWAY_OLLAMA_URL` + `SWAY_OLLAMA_MODEL`. Runs the
+  full scoring surface against a live Ollama serving a small model
+  (e.g. `llama3.2:1b`) and asserts finite output + preflight pass.
+  Documents the wall-time budget the "≤3× HF backend" claim rests
+  on once the concurrent-dispatch pool lands.
+
 ### Sprint 12 — Interactive HTML report
 
 Closes Audit 01 innovation item F6. Adds the exploration surface to
