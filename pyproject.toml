@@ -68,6 +68,14 @@ semsim = [
 dlm = [
     "dlm>=0.9",
 ]
+# OpenAI-compatible HTTP scoring backend (S13 / F7). Unlocks hosted
+# fine-tunes (OpenAI platform, vLLM serve, Ollama) without pulling
+# torch. httpx + tenacity together are a few hundred KB of deps vs
+# the 3 GB the [hf] extra costs.
+api = [
+    "httpx>=0.27",
+    "tenacity>=9.0",
+]
 # Visualization (P9 + S12 HTML report).
 viz = [
     "matplotlib>=3.8",
@@ -84,6 +92,8 @@ all = [
     "textstat>=0.7",
     "nlpaug>=1.1",
     "sentence-transformers>=3.0",
+    "httpx>=0.27",
+    "tenacity>=9.0",
     "matplotlib>=3.8",
     "plotly>=5.20",
 ]
