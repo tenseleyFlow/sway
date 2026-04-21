@@ -77,6 +77,11 @@ _PROBE_INTENT: dict[str, str] = {
         "C2: general-knowledge regression check. Did the fine-tune "
         "forget the world while learning the doc?"
     ),
+    "external_perplexity": (
+        "F3: diffuse-forgetting check — rolling-logprob delta on "
+        "held-out public-domain English. Complements calibration_drift "
+        "(the point-factual counterpart)."
+    ),
     "leakage": (
         "C3: verbatim-recital + perturbation-fragility check. High "
         "recall + low fragility → memorization, not generalization."
@@ -317,7 +322,20 @@ def _build_suite(sections: tuple[Section, ...]) -> list[dict[str, Any]]:
             }
         )
     suite.append({"name": "general_knowledge", "kind": "calibration_drift"})
+    # Emit the external_perplexity probe when the doc has any PROSE
+    # content at all — the probe measures *external* prose degradation,
+    # so the docs that benefit most are the ones where the adapter was
+    # trained on text that might over-fit the base model's English
+    # fluency.
     if any(s.kind == "prose" for s in sections):
+        suite.append(
+            {
+                "name": "external_ppl",
+                "kind": "external_perplexity",
+                "corpus": "public_domain_en",
+                "max_chunks": 8,  # half of default for faster autogen'd runs
+            }
+        )
         suite.append(
             {
                 "name": "verbatim_leak",
