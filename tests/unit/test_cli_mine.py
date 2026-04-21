@@ -129,7 +129,7 @@ models:
 suite:
   - name: dk
     kind: delta_kl
-    prompts: [p1, p2, p3, p4]
+    prompts: [p1, p2, p3, p4, p5, p6, p7, p8]
     assert_mean_gte: 0.0
 """.strip()
     )
