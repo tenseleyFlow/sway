@@ -22,8 +22,8 @@ from __future__ import annotations
 
 import pytest
 
-
 # -------- the one-liner --------
+
 
 @pytest.mark.sway(spec="sway.yaml", threshold=0.6)
 def test_adapter_healthy() -> None:

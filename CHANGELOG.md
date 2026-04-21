@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Sprint 15 — pytest plugin (`@pytest.mark.sway`)
+
+Closes Audit 01 innovation item F10. Packages sway as a pytest
+library so teams already running pytest adopt sway with a single
+decorator instead of a subprocess wrapper.
+
+- **New plugin** (`src/dlm_sway/pytest_plugin.py`) auto-loaded via
+  the `pytest11` entry point after `pip install 'dlm-sway[pytest]'`.
+  `@pytest.mark.sway(spec="...", threshold=0.0, weights=None)`
+  expands a single pytest function into **one test item per probe**
+  in the referenced spec + an optional `__gate__` item that fires
+  only when the composite score drops below `threshold`.
+- **Verdict translation.** `FAIL` / `ERROR` → pytest Failed,
+  `SKIP` → pytest Skipped, `WARN` → pytest warning, `PASS` →
+  pytest pass. Probe-level failures isolate: a failing adherence
+  probe doesn't mask a failing calibration one, and `pytest -k
+  adherence` runs just that probe.
+- **Suite runs once per decorated function.** A session-scoped
+  `_SuiteCache` keyed on `(spec_path, weights)` ensures the N-way
+  item expansion doesn't multiply backend wall time. Two
+  `@pytest.mark.sway` tests against the same spec share one run.
+- **Malformed marks fail cleanly.** Missing `spec`, non-numeric
+  `threshold`, non-dict `weights`, and unknown kwargs produce a
+  synthetic `_ConfigErrorItem` with a green-field pytest failure
+  line — no cryptic collection-time tracebacks.
+- **New `[pytest]` extra** — just `pytest>=8.0`. Matches the pattern
+  other plugin-style extras use. Also registers the `pytest11`
+  entry point so the plugin is discovered automatically on install,
+  consistent with pytest-cov / pytest-xdist.
+- **Example directory** at `examples/pytest_integration/` with a
+  minimal `sway.yaml` + `test_sway_gate.py` showing the decorator
+  replacing a legacy `subprocess.run(["sway", "gate", ...])`
+  wrapper. README gains a "Pytest integration" section pointing at
+  it.
+- **13 new unit tests** via pytest's canonical `pytester` fixture:
+  marker registration, N-item expansion, FAIL / SKIP / ERROR
+  routing, gate below-threshold failure, gate above-threshold pass,
+  gate absence when `threshold=0`, malformed-mark error paths,
+  cache sharing across multiple decorated tests.
+- **Drive-by fix for the S14 CI-narrowing test flake.** The dummy
+  backend's per-prompt noise was seeded via Python's `hash()`,
+  which is salted per-process via `PYTHONHASHSEED`. Swapped to a
+  stable `hashlib.md5`-derived seed so the narrowing invariant
+  holds deterministically across test-order permutations.
+
 ### Sprint 14 — Bootstrap CIs + forward-pass trace CLI
 
 Closes Audit 01 innovation items F9 (bootstrap confidence intervals
