@@ -64,7 +64,7 @@ class TestMaskVariableFields:
     def test_default_variable_fields_has_expected_members(self) -> None:
         """Lock the default mask set — accidentally dropping a field
         from the mask would make the golden test newly flaky."""
-        assert DEFAULT_VARIABLE_FIELDS >= {
+        expected_members = {
             "started_at",
             "finished_at",
             "wall_seconds",
@@ -72,6 +72,7 @@ class TestMaskVariableFields:
             "sway_version",
             "backend_stats",
         }
+        assert expected_members <= DEFAULT_VARIABLE_FIELDS
 
 
 class TestCompareGoldensIdentical:
@@ -188,7 +189,8 @@ class TestDiffRepr:
         s = str(d)
         assert "$.foo" in s
         assert "drift" in s
-        assert "1.0" in s and "2.0" in s
+        assert "1.0" in s
+        assert "2.0" in s
 
 
 class TestRealisticPayload:
