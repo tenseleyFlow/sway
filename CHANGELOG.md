@@ -122,7 +122,7 @@ Initial pre-alpha. Full 11-primitive battery shipped.
 - **Ablation**
   - `adapter_ablation` *(signature primitive)* — λ-scaled divergence curve with linearity, saturation, overshoot metrics
 - **Baseline**
-  - `null_adapter` — stats scaffolding for z-score calibration (implementation pending)
+  - `null_adapter` — per-kind null distribution matrix for z-score calibration (wired end-to-end in Unreleased)
 
 ### Infrastructure
 
@@ -136,7 +136,6 @@ Initial pre-alpha. Full 11-primitive battery shipped.
 
 ### Known gaps
 
-- Null-adapter baseline is scaffolded but its HF-level materialization (building random-init LoRAs at matched rank) is not yet wired — probes fall back to fixed thresholds until the next milestone.
-- Custom backend entry-point dispatch (`kind: custom`) is stubbed but not implemented.
-- MLX backend is registered as a future-milestone target; all MLX paths raise `BackendNotAvailableError`.
+- MLX backend loads **two** model copies in memory (base + adapter-fused) because `mlx_lm` has no runtime adapter toggle. Memory footprint is ~2x the HF path; fine for the small (<3B) models MLX typically runs.
+- MLX requires a pre-converted `.npz` adapter — raw PEFT safetensors are rejected by `mlx_lm.load`. A PEFT-→-MLX converter is a future milestone.
 - PyPI publication of the `dlm-sway` wheel is pending a clean CI release workflow.
