@@ -42,7 +42,13 @@ class _VariableFtView(_DummyView):
 
     def next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         base_dist = super().next_token_dist(prompt, top_k=top_k)
-        rng = np.random.default_rng(abs(hash(prompt)) % 1_000_003)
+        # Use a stable hash (hashlib) instead of Python's built-in
+        # ``hash()``, which salts per-process via PYTHONHASHSEED and
+        # would make per-prompt dispersion vary across pytest runs.
+        import hashlib
+
+        seed = int(hashlib.md5(prompt.encode("utf-8")).hexdigest()[:8], 16)
+        rng = np.random.default_rng(seed)
         noise = rng.normal(0.0, 0.5, size=base_dist.logprobs.shape).astype(np.float32)
         perturbed = base_dist.logprobs + noise
         # Renormalize (within the top-k slice).
