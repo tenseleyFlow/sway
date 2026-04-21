@@ -18,12 +18,12 @@
 
 ## Probes
 
-| name | kind | verdict | score | raw | z | duration | note |
-|---|---|---|---:|---:|---:|---:|---|
-| dk | `delta_kl` | pass | 0.87 | 0.456 | +5.12σ | 0.12s | mean js=0.4560, z=+5.12σ vs null |
-| sis | `section_internalization` | fail | 0.30 | 0.012 | +0.50σ | 0.46s | 1/4 sections cleared effective_sis≥0.05 |
-| lk | `leakage` | skip | — | — | — | 0.00s | no PROSE sections to test for leakage |
-| ablation | `adapter_ablation` | error | — | — | — | 0.00s | backend does not implement ScalableDifferentialBackend |
+| name | kind | verdict | score | raw | ci95 | z | duration | note |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| dk | `delta_kl` | pass | 0.87 | 0.456 | — | +5.12σ | 0.12s | mean js=0.4560, z=+5.12σ vs null |
+| sis | `section_internalization` | fail | 0.30 | 0.012 | — | +0.50σ | 0.46s | 1/4 sections cleared effective_sis≥0.05 |
+| lk | `leakage` | skip | — | — | — | — | 0.00s | no PROSE sections to test for leakage |
+| ablation | `adapter_ablation` | error | — | — | — | — | 0.00s | backend does not implement ScalableDifferentialBackend |
 
 ## Top findings
 
