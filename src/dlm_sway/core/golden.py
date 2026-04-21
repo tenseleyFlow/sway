@@ -94,7 +94,7 @@ def compare_goldens(
     actual: Any,
     expected: Any,
     *,
-    logprob_tol: float = 1e-6,
+    logprob_tol: float = 1e-4,
     score_tol: float = 1e-4,
 ) -> list[Diff]:
     """Compare two masked JSON payloads; return tolerance-exceeding diffs.
@@ -106,6 +106,16 @@ def compare_goldens(
     the appropriate tolerance (``score_tol`` for score-like fields,
     ``logprob_tol`` elsewhere). Missing keys, length mismatches, or
     type changes surface as structural diffs regardless of tolerance.
+
+    **Tolerance rationale.** S18's first CI observation showed
+    intra-platform BLAS drift in the 1e-5–1e-6 band on ubuntu-latest
+    runners (heterogeneous Intel/AMD hardware + variable OpenBLAS
+    builds), which put 1e-6 below the natural noise floor. A real
+    algorithm change — e.g. flipping ``top_k=256`` → 128 in
+    :mod:`delta_kl` — shifts probe raws by 1e-2 to 1e-1, three orders
+    of magnitude above the current ``1e-4`` tolerance. Tuning room to
+    revisit once we have more CI history; see the sprint's risks
+    section for the "too tight vs too loose" tradeoff.
     """
     diffs: list[Diff] = []
     _walk(actual, expected, path="$", diffs=diffs, logprob_tol=logprob_tol, score_tol=score_tol)
