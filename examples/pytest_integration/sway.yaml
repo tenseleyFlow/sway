@@ -1,0 +1,31 @@
+# Minimal sway.yaml for the @pytest.mark.sway example.
+# Swap `models` for your real base + adapter before running.
+version: 1
+
+models:
+  base:
+    kind: hf
+    base: "HuggingFaceTB/SmolLM2-135M-Instruct"
+  ft:
+    kind: hf
+    base: "HuggingFaceTB/SmolLM2-135M-Instruct"
+    adapter: "~/.dlm/store/<YOUR_DLM_ID>/adapter/versions/v0001"
+
+defaults:
+  seed: 0
+
+suite:
+  - name: "null"
+    kind: "null_adapter"
+    runs: 3
+  - name: "adherence"
+    kind: "delta_kl"
+    prompts:
+      - "The capital of France is"
+      - "Two plus two equals"
+      - "Once upon a time"
+      - "The sky is"
+    assert_z_gte: 3.0
+  - name: "calibration"
+    kind: "calibration_drift"
+    items_limit: 50
