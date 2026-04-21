@@ -287,3 +287,92 @@ class TestMissingSemsim:
         result = probe.run(spec, ctx)
         assert result.verdict == Verdict.SKIP
         assert "semsim" in result.message
+
+    def test_skip_when_sklearn_import_fails(
+        self, monkeypatch: pytest.MonkeyPatch, monkeyed_embed: dict[str, np.ndarray]
+    ) -> None:
+        """Covers the ``_kmeans_cluster`` import-error SKIP branch directly.
+
+        The ``_load_embedder`` raise branch is tested above; this test
+        stubs ``_load_embedder`` to succeed and replaces
+        ``_kmeans_cluster`` with a raiser that mimics an uninstalled
+        sklearn. Before this test, the sklearn-missing SKIP path in
+        ``probes/cluster_kl.py`` was unreachable under any test — the
+        embedder raise always fired first.
+        """
+        from dlm_sway.core.errors import BackendNotAvailableError
+
+        for p in [f"p-{i}" for i in range(8)]:
+            monkeyed_embed[p] = np.array([1.0, 0.0], dtype=np.float32)
+
+        def sklearn_raiser(*_args: Any, **_kwargs: Any) -> Any:
+            raise BackendNotAvailableError(
+                "cluster_kl",
+                extra="semsim",
+                hint="cluster_kl needs scikit-learn for k-means clustering.",
+            )
+
+        monkeypatch.setattr(
+            "dlm_sway.probes.cluster_kl._kmeans_cluster",
+            sklearn_raiser,
+        )
+        probe = ClusterKLProbe()
+        spec = probe.spec_cls(
+            name="ck",
+            kind="cluster_kl",
+            prompts=[f"p-{i}" for i in range(8)],
+            num_clusters=2,
+            min_prompts=4,
+        )
+        ctx = RunContext(
+            backend=DummyDifferentialBackend(base=DummyResponses(), ft=DummyResponses())
+        )
+        result = probe.run(spec, ctx)
+        assert result.verdict == Verdict.SKIP
+        assert "semsim" in result.message
+        assert "scikit-learn" in result.message
+
+
+class TestRealKMeans:
+    """Exercise the actual ``sklearn.cluster.KMeans`` primitive.
+
+    Every other test in this file monkeypatches ``_kmeans_cluster`` with
+    an argmax stub so suites can run in CI environments without the
+    ``[semsim]`` extra installed. That leaves the real sklearn path —
+    the probe's entire reason for existing — uncovered. The tests here
+    skip when sklearn isn't available and execute the real import
+    otherwise.
+    """
+
+    def test_real_kmeans_separates_two_gaussians(self) -> None:
+        """Two clearly-separated clusters → k-means recovers the correct
+        partition with a fixed seed."""
+        pytest.importorskip("sklearn")
+        from dlm_sway.probes.cluster_kl import _kmeans_cluster
+
+        rng = np.random.default_rng(0)
+        # Cluster A centered at (0, 0); cluster B centered at (5, 0).
+        group_a = rng.normal(loc=0.0, scale=0.5, size=(8, 2)).astype(np.float32)
+        group_b = rng.normal(loc=(5.0, 0.0), scale=0.5, size=(8, 2)).astype(np.float32)
+        embeddings = np.vstack([group_a, group_b])
+        labels = _kmeans_cluster(embeddings, k=2, seed=0)
+        assert labels.shape == (16,)
+        # All-A should share a label; all-B should share the other.
+        label_a = set(labels[:8].tolist())
+        label_b = set(labels[8:].tolist())
+        assert len(label_a) == 1
+        assert len(label_b) == 1
+        assert label_a != label_b
+
+    def test_real_kmeans_seed_is_deterministic(self) -> None:
+        """Two runs with the same seed → identical label vectors. Pins
+        the determinism contract in a way that the argmax stub can't.
+        """
+        pytest.importorskip("sklearn")
+        from dlm_sway.probes.cluster_kl import _kmeans_cluster
+
+        rng = np.random.default_rng(0)
+        embeddings = rng.normal(size=(20, 4)).astype(np.float32)
+        labels_a = _kmeans_cluster(embeddings, k=3, seed=42)
+        labels_b = _kmeans_cluster(embeddings, k=3, seed=42)
+        assert np.array_equal(labels_a, labels_b)
