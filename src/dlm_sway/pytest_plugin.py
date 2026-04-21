@@ -310,7 +310,8 @@ class _SwayProbeItem(pytest.Item):
             )
         _apply_verdict(probe)
 
-    def repr_failure(self, excinfo: Any) -> str:
+    def repr_failure(self, excinfo: Any, style: str | None = None) -> str:
+        del style  # we always render "short"; pytest's style kwarg ignored
         return str(excinfo.getrepr(style="short"))
 
     def reportinfo(self) -> tuple[Any, int | None, str]:
@@ -345,7 +346,8 @@ class _SwayGateItem(pytest.Item):
                 pytrace=False,
             )
 
-    def repr_failure(self, excinfo: Any) -> str:
+    def repr_failure(self, excinfo: Any, style: str | None = None) -> str:
+        del style  # we always render "short"; pytest's style kwarg ignored
         return str(excinfo.getrepr(style="short"))
 
     def reportinfo(self) -> tuple[Any, int | None, str]:
@@ -367,8 +369,8 @@ class _ConfigErrorItem(pytest.Item):
     def runtest(self) -> None:
         pytest.fail(self._message, pytrace=False)
 
-    def repr_failure(self, excinfo: Any) -> str:
-        del excinfo  # this item doesn't inspect the traceback
+    def repr_failure(self, excinfo: Any, style: str | None = None) -> str:
+        del excinfo, style  # config-error path surfaces only the canned message
         return self._message
 
     def reportinfo(self) -> tuple[Any, int | None, str]:
