@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Sprint 12 — Interactive HTML report
+
+Closes Audit 01 innovation item F6. Adds the exploration surface to
+sit alongside the terminal (CI logs) and markdown (PR artifacts)
+outputs — a single-file interactive HTML page for the research /
+write-up case.
+
+- **`sway report result.json --format html --out report.html`** emits
+  a self-contained HTML page with five interactive Plotly panels:
+  composite-score gauge with banded thresholds, per-category
+  horizontal-bar breakdown, per-section SIS bar chart (when
+  `section_internalization` evidence carries a `per_section` array),
+  adapter-ablation response curve (when `adapter_ablation` evidence
+  carries `lambdas` + `mean_divergence_per_lambda`), and an
+  all-probe score × z-score scatter with hover tooltips. The terminal
+  verdict palette (green / yellow / red) carries across every panel.
+- **Plotly bundle inlined once in `<head>`**; each panel is a
+  Plotly-produced `<div>` with a stable `sway-*` id so snapshot tests
+  don't churn on Plotly point releases. No external `<script src>` /
+  `<link href>` references — the page loads offline from a single
+  ~4.9 MB file (Plotly 6.x JS is the majority of that; the sway
+  wrapper + chart data is ~40 KB).
+- **CLI gates `--out PATH` on file-producing formats.** `--format html`
+  requires `--out` (3 MB of JS has no business on stdout);
+  `--format md|json|junit` now also accept `--out` for symmetry with
+  the HTML path. `--format terminal` rejects `--out` — the terminal
+  renderer is for the console only.
+- **`plotly>=5.20` is optional**, shipped via the existing `[viz]`
+  extra (alongside matplotlib). Without it, `--format html` exits 2
+  with the `pip install 'dlm-sway[viz]'` install hint. Graceful
+  ImportError → RuntimeError translation tested end-to-end.
+- **Snapshot** at `tests/snapshots/report.html` locks the Sway-owned
+  wrapper structure. The Plotly JS bundle is stripped from the
+  snapshot (replaced with a placeholder) so the 43-line snapshot
+  stays human-reviewable and Plotly version bumps don't drift it.
+- **Prove-the-value:** `test_html_from_real_history_loads_offline`
+  renders HTML from the committed `tests/fixtures/sway-history/02-*`
+  run (4 probes, real exported payload) and asserts: file parses via
+  `html.parser`, zero external `<script src>` / `<link href>`
+  references, every probe name appears in the body, file size lands
+  between 1 MB and 10 MB. Measured output: 4.87 MB.
+
 ### Sprint 11 — `sway compare` across saved JSON runs
 
 Closes Audit 01 innovation item F5. Ships the regression-dashboard
