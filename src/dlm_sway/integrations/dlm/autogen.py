@@ -345,6 +345,30 @@ def _build_suite(sections: tuple[Section, ...]) -> list[dict[str, Any]]:
             }
         )
 
+    # F07 — ``cluster_kl`` when the prompt pool clears the probe's
+    # ``min_prompts`` floor. Pulls from the *full* instruction pool +
+    # prose leading sentences (``kl_prompts`` is capped at 16 for
+    # delta_kl; we want wider coverage for clustering). S16's scope
+    # set a 20-prompt floor; mirror it so emission is stable across
+    # documents of varying length.
+    all_instruction_prompts = [q for q, _ in instruction_probes]
+    cluster_prompts: list[str] = []
+    seen: set[str] = set()
+    for p in all_instruction_prompts + prose_prompts:
+        if p not in seen:
+            seen.add(p)
+            cluster_prompts.append(p)
+    if len(cluster_prompts) >= 20:
+        suite.append(
+            {
+                "name": "cluster_kl_topics",
+                "kind": "cluster_kl",
+                "prompts": cluster_prompts[:64],
+                "num_clusters": 5,
+                "min_prompts": 20,
+            }
+        )
+
     # Signature ablation — goes last because it's the most expensive.
     if kl_prompts:
         suite.append(
