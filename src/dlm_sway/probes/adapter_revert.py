@@ -23,7 +23,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from dlm_sway.core.errors import BackendNotAvailableError
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 
 class AdapterRevertCase(BaseModel):
@@ -50,6 +57,13 @@ class AdapterRevertSpec(ProbeSpec):
     can't distinguish revert from adherence, and including them would
     inflate the revert rate with noise."""
     assert_revert_rate_lt: float = 0.25
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Lower-is-better (the adapter should revert *less* than a
+    random null), so the z is negated before comparison. Note: this
+    probe usually opts out of calibration because the null proxy can't
+    run the embedder; the z-score path is unused in practice but kept
+    for shape consistency with the rest of the numeric suite."""
 
 
 class AdapterRevertProbe(Probe):
@@ -126,9 +140,26 @@ class AdapterRevertProbe(Probe):
             )
 
         rate = reverts / total
-        verdict = Verdict.PASS if rate < spec.assert_revert_rate_lt else Verdict.FAIL
-        score = max(0.0, 1.0 - rate / max(spec.assert_revert_rate_lt, 1e-6))
-        score = float(np.clip(score, 0.0, 1.0))
+
+        # Lower-is-better: negate z so ``z >= threshold`` means
+        # "σ less revert than null".
+        stats = get_null_stats(ctx, spec.kind)
+        raw_z = z_score(rate, stats)
+        z = -raw_z if raw_z is not None else None
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = f"revert_rate={rate:.2%} (reverts={reverts}/{total}), z={z:+.2f}σ vs null"
+        else:
+            verdict = Verdict.PASS if rate < spec.assert_revert_rate_lt else Verdict.FAIL
+            score_raw = max(0.0, 1.0 - rate / max(spec.assert_revert_rate_lt, 1e-6))
+            score = float(np.clip(score_raw, 0.0, 1.0))
+            message = (
+                f"revert_rate={rate:.2%} (reverts={reverts}/{total}, "
+                f"dropped_trivial={dropped_trivial}) {no_calibration_note(spec.kind)}"
+            )
 
         return safe_finalize(
             name=spec.name,
@@ -136,6 +167,7 @@ class AdapterRevertProbe(Probe):
             verdict=verdict,
             score=score,
             raw=rate,
+            z_score=z,
             evidence={
                 "revert_rate": rate,
                 "reverts": reverts,
@@ -144,7 +176,7 @@ class AdapterRevertProbe(Probe):
                 "per_case": per_case[:8],  # cap to keep JSON bounded
                 "weight": spec.weight,
             },
-            message=f"revert_rate={rate:.2%} (reverts={reverts}/{total}, dropped_trivial={dropped_trivial})",
+            message=message,
         )
 
 
