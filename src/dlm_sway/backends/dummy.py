@@ -147,8 +147,15 @@ class _DummyView:
         if self._mode == "base":
             lp = np.array([-0.1] + [-5.0] * (k - 1), dtype=np.float32)
         else:
-            # More uniform mass across the top-k tokens.
+            # More uniform mass across the top-k tokens. A *literally*
+            # uniform distribution looks like a broken lm_head to
+            # ``_divergence``'s degenerate-distribution guard, so we
+            # add a tiny monotonic perturbation — the spread stays
+            # small enough that the ft dist still looks "broad" to
+            # KL/JS but clears the 1e-9 uniformity threshold a real
+            # model would also clear via fp32 accumulation noise.
             lp = np.full(k, -math.log(k), dtype=np.float32)
+            lp += np.linspace(-1e-4, 1e-4, k, dtype=np.float32)
         # B6: tail_logprob=None means "no measurable tail" (k covers vocab
         # or residual underflowed); reserve floats for measurable mass.
         residual = 1.0 - float(np.exp(lp).sum())
