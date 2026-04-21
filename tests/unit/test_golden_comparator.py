@@ -90,21 +90,20 @@ class TestCompareGoldensIdentical:
 class TestCompareGoldensTolerance:
     def test_floats_within_logprob_tol_pass(self) -> None:
         actual = {"probes": [{"raw": 0.12345}]}
-        expected = {"probes": [{"raw": 0.12345 + 5e-7}]}  # well under 1e-6
+        expected = {"probes": [{"raw": 0.12345 + 5e-5}]}  # well under 1e-4
         assert compare_goldens(actual, expected) == []
 
     def test_floats_just_above_logprob_tol_fail(self) -> None:
         actual = {"probes": [{"raw": 0.12345}]}
-        expected = {"probes": [{"raw": 0.12345 + 2e-6}]}  # double the tol
+        expected = {"probes": [{"raw": 0.12345 + 2e-4}]}  # double the tol
         diffs = compare_goldens(actual, expected)
         assert len(diffs) == 1
         assert "raw" in diffs[0].path
         assert "Δ" in diffs[0].reason
 
-    def test_scores_use_looser_tol(self) -> None:
-        """Score fields get ``score_tol`` (1e-4), not ``logprob_tol``.
-        A 5e-5 drift on a score field passes; the same drift on a
-        non-score field would fail at default logprob tol."""
+    def test_scores_match_logprob_tol_default(self) -> None:
+        """Score fields use ``score_tol`` (1e-4) — same as ``logprob_tol``
+        after S18's first-week tuning. A 5e-5 drift passes on both."""
         actual = {"overall": 0.85}
         expected = {"overall": 0.85 + 5e-5}
         assert compare_goldens(actual, expected) == []
@@ -120,10 +119,13 @@ class TestCompareGoldensTolerance:
         """Callers can tighten or loosen both tolerances."""
         actual = {"probes": [{"raw": 0.1}]}
         expected = {"probes": [{"raw": 0.1 + 5e-4}]}
-        # Default tol (1e-6) → fail.
+        # Default tol (1e-4) → fail.
         assert compare_goldens(actual, expected) != []
         # Loosened to 1e-3 → pass.
         assert compare_goldens(actual, expected, logprob_tol=1e-3) == []
+        # Tightened to 1e-6 → same fail, but also a regression guard
+        # if we ever tighten the default back.
+        assert compare_goldens(actual, expected, logprob_tol=1e-6) != []
 
     def test_nan_vs_nan_treated_equal(self) -> None:
         actual = {"z_score": float("nan")}
@@ -226,7 +228,7 @@ class TestRealisticPayload:
             "probes": [
                 {
                     "name": "dk",
-                    "raw": 0.4561 + 5e-7,  # within logprob_tol
+                    "raw": 0.4561 + 5e-5,  # within logprob_tol (1e-4)
                     "score": 0.87,
                     "duration_s": 0.789,  # different duration
                 },
@@ -237,15 +239,15 @@ class TestRealisticPayload:
         assert compare_goldens(masked_actual, masked_expected) == []
 
     def test_simulated_silent_algorithm_change_is_caught(self) -> None:
-        """Prove-the-value sanity: a 1e-3 drift on a probe's raw is
-        flagged, even when every variable field differs."""
+        """Prove-the-value sanity: a 1e-2 drift on a probe's raw is
+        flagged — well above the 1e-4 default tolerance. Real
+        algorithm changes (e.g. flipping ``top_k=256`` → 128) shift
+        raws by this order of magnitude."""
         expected = {"probes": [{"raw": 0.4561}]}
-        # Simulate an algorithm change: someone edited delta_kl's
-        # top_k default and raw shifted by 1e-3.
-        actual = {"probes": [{"raw": 0.4571}]}
+        actual = {"probes": [{"raw": 0.4561 + 1e-2}]}
         diffs = compare_goldens(actual, expected)
         assert len(diffs) == 1
         assert "raw" in diffs[0].path
         assert math.isclose(
-            abs(float(diffs[0].actual) - float(diffs[0].expected)), 1e-3, abs_tol=1e-9
+            abs(float(diffs[0].actual) - float(diffs[0].expected)), 1e-2, abs_tol=1e-9
         )
