@@ -69,8 +69,10 @@ class TestPackContract:
             assert isinstance(item, tuple), f"item {idx}: not a tuple"
             assert len(item) == 2, f"item {idx}: not a pair"
             prompt, gold = item
-            assert isinstance(prompt, str) and prompt, f"item {idx}: bad prompt"
-            assert isinstance(gold, str) and gold, f"item {idx}: bad gold"
+            assert isinstance(prompt, str), f"item {idx}: prompt not str"
+            assert prompt, f"item {idx}: empty prompt"
+            assert isinstance(gold, str), f"item {idx}: gold not str"
+            assert gold, f"item {idx}: empty gold"
 
     def test_items_limit_subsets_pack(self) -> None:
         """``items_limit`` truncates to the first N items deterministically."""
