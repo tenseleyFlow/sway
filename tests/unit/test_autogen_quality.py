@@ -103,6 +103,45 @@ def _handle_with_many_instruction_probes(n: int) -> DlmHandle:
     )
 
 
+class TestPortableDlmSource:
+    """F09 (Audit 03) — ``_portable_dlm_source`` emits a cwd-relative
+    path when the ``.dlm`` lives inside the cwd (survives CI checkout),
+    absolute path when it lives elsewhere.
+    """
+
+    def test_cwd_relative_when_inside(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        from dlm_sway.integrations.dlm.autogen import _portable_dlm_source
+
+        # Set cwd to tmp_path; drop a .dlm inside a subdir.
+        subdir = tmp_path / "src"
+        subdir.mkdir()
+        dlm_file = subdir / "demo.dlm"
+        dlm_file.write_text("# empty\n")
+        monkeypatch.chdir(tmp_path)
+        source = _portable_dlm_source(dlm_file)
+        assert source == "src/demo.dlm"
+        # Not an absolute path — the whole point of F09.
+        assert not Path(source).is_absolute()
+
+    def test_absolute_when_outside(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """A ``.dlm`` somewhere outside the cwd falls back to its
+        absolute path — relative-ization would point at a nonexistent
+        parent directory on a fresh checkout."""
+        from dlm_sway.integrations.dlm.autogen import _portable_dlm_source
+
+        # cwd inside tmp_path; .dlm lives in a sibling tree.
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        sibling = tmp_path / "other"
+        sibling.mkdir()
+        dlm_file = sibling / "demo.dlm"
+        dlm_file.write_text("# empty\n")
+        monkeypatch.chdir(cwd)
+        source = _portable_dlm_source(dlm_file)
+        assert Path(source).is_absolute()
+        assert source == str(dlm_file.resolve())
+
+
 class TestAutogenClusterKL:
     """F07 — autogen emits ``cluster_kl`` when the prompt pool has
     enough entries to clear S16's ``min_prompts=20`` floor, and omits
