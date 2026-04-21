@@ -200,6 +200,4 @@ def validate_all_probes(suite: list[dict[str, Any]]) -> None:
             label = raw.get("name") or f"entry #{idx}"
             errors.append(f"  - {label}: {exc}")
     if errors:
-        raise SpecValidationError(
-            "spec contains invalid probe entries:\n" + "\n".join(errors)
-        )
+        raise SpecValidationError("spec contains invalid probe entries:\n" + "\n".join(errors))
