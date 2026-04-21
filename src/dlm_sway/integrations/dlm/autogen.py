@@ -22,6 +22,20 @@ from dlm_sway.core.errors import SwayError
 from dlm_sway.core.sections import Section
 from dlm_sway.integrations.dlm.resolver import DlmHandle, resolve_dlm
 
+#: Stylistic-elicitation prompts used by the generated ``style_fingerprint``
+#: probe (B8). Picked to be open-ended and content-neutral — the model's
+#: voice under the adapter is the signal we want, *not* its ability to
+#: continue a sentence the doc already wrote. Each prompt deliberately
+#: invites prose-shaped output of moderate length (one paragraph).
+_STYLE_ELICITATION_PROMPTS: tuple[str, ...] = (
+    "Write a short paragraph explaining your approach to a difficult problem.",
+    "Describe what you find most interesting about a topic you know well.",
+    "Summarize an important idea for a curious novice.",
+    "Reflect on a small lesson you learned recently.",
+    "Explain a concept using a concrete example.",
+    "Tell a brief story that illustrates a single point.",
+)
+
 
 def write_sway_yaml(dlm_path: Path, out: Path) -> None:
     """Resolve the .dlm, build a spec dict, write it as YAML to ``out``."""
@@ -72,7 +86,13 @@ def _build_suite(sections: tuple[Section, ...]) -> list[dict[str, Any]]:
                 prose_prompts.append(first_sentence + ".")
 
     kl_prompts = [q for q, _ in instruction_probes][:16] or prose_prompts[:16]
-    style_prompts = prose_prompts[:8] or [q for q, _ in instruction_probes][:8]
+    # B8: style_fingerprint needs *stylistic elicitation* — open-ended
+    # prompts that ask the model to write in its own voice — not the
+    # leading sentence of a doc paragraph (which elicits continuation
+    # of the doc itself, conflating style with content). The fixed set
+    # below is intentionally generic so the model's stylistic shift
+    # under the adapter is the only signal in play.
+    style_prompts = list(_STYLE_ELICITATION_PROMPTS)
 
     suite: list[dict[str, Any]] = []
 
