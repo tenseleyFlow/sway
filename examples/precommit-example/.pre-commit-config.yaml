@@ -1,0 +1,27 @@
+# Consumer-side pre-commit config — plug this into your repo's
+# ``.pre-commit-config.yaml`` to gate the adapter on every commit.
+#
+# Rev pinning: sway hasn't tagged a release yet (pre-v0.1.0). Pin to a
+# specific commit SHA rather than ``HEAD`` so the gate's behavior
+# doesn't drift under you on upstream changes. Bump the SHA
+# deliberately when you want to pick up new probes. After v0.1.0
+# ships you'll switch to ``rev: v0.1.0`` and forget about it.
+
+repos:
+  - repo: https://github.com/tenseleyFlow/sway
+    # Pin to a specific commit — update deliberately when you want
+    # upstream changes. Replace with a tag like ``v0.1.0`` once sway
+    # publishes its first release.
+    rev: 2ecd9a0c9d65a9b9576a185597c88f41444f9646
+    hooks:
+      # Recommended: ``sway-gate`` uses the sway install on your PATH.
+      # Fastest path; assumes you've ``pip install 'dlm-sway[hf]'``.
+      - id: sway-gate
+        args: ["examples/precommit-example/sway.yaml", "--threshold=0.0"]
+
+      # Alternative — uncomment if you don't have sway installed
+      # system-wide. Pre-commit will build a fresh venv and install
+      # sway + torch + transformers (~5 GB) on first run.
+      #
+      # - id: sway-gate-isolated
+      #   args: ["examples/precommit-example/sway.yaml", "--threshold=0.0"]
