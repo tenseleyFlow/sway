@@ -48,6 +48,7 @@ app.command("diff")(commands.diff_cmd)
 app.command("autogen")(commands.autogen_cmd)
 app.command("doctor")(commands.doctor_cmd)
 app.command("report")(commands.report_cmd)
+app.command("list-probes")(commands.list_probes_cmd)
 
 
 def main() -> None:

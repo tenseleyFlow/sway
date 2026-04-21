@@ -47,8 +47,21 @@ def run_cmd(
             ),
         ),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Validate the spec, list the probes that would run with their "
+                "category, and exit 0 — no backend is built (D6)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Execute a suite and render a terminal report."""
+    if dry_run:
+        _print_dry_run(spec)
+        return
     try:
         weights_override = _parse_weights_flag(weights)
         result, score_obj = _execute_spec(spec, weights_override=weights_override)
@@ -67,6 +80,70 @@ def run_cmd(
     if markdown_out is not None:
         markdown_out.write_text(report.to_markdown(result, score_obj), encoding="utf-8")
         console.print(f"[dim]wrote markdown → {markdown_out}[/dim]")
+
+
+def _print_dry_run(spec_path: Path) -> None:
+    """D6: load + validate the spec, print the probe table, exit cleanly.
+
+    No backend construction — useful for fast feedback on spec edits
+    before paying for a model load.
+    """
+    from rich.table import Table
+
+    from dlm_sway.probes.base import build_probe, registry, validate_all_probes
+    from dlm_sway.suite.loader import load_spec
+
+    try:
+        spec = load_spec(spec_path)
+        validate_all_probes(spec.suite)
+    except SwayError as exc:
+        typer.secho(f"error: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=2) from exc
+
+    console = Console()
+    console.print(f"[bold]dry-run for {spec_path}[/bold] — {len(spec.suite)} probe(s)")
+    console.print()
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    table.add_column("#", style="dim")
+    table.add_column("name", style="cyan")
+    table.add_column("kind")
+    table.add_column("category", style="dim")
+    table.add_column("enabled", style="dim")
+    registered = registry()
+    for idx, raw in enumerate(spec.suite, start=1):
+        probe, probe_spec = build_probe(raw)
+        cls = registered.get(probe.kind)
+        category = cls.category if cls is not None else "?"
+        table.add_row(
+            str(idx),
+            probe_spec.name,
+            probe.kind,
+            category,
+            "yes" if probe_spec.enabled else "no",
+        )
+    console.print(table)
+
+
+def list_probes_cmd() -> None:
+    """List every shipped probe kind with its category + one-line summary (D6)."""
+    # Make sure every probe module has been imported and registered.
+    from rich.table import Table
+
+    import dlm_sway.probes  # noqa: F401
+    from dlm_sway.probes.base import registry
+
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 1))
+    table.add_column("kind", style="cyan")
+    table.add_column("category", style="dim")
+    table.add_column("summary")
+    for kind in sorted(registry()):
+        cls = registry()[kind]
+        # First non-empty line of the docstring is the one-liner.
+        doc = (cls.__doc__ or "").strip()
+        summary = next((line.strip() for line in doc.splitlines() if line.strip()), "")
+        table.add_row(kind, cls.category, summary)
+    Console().print(table)
 
 
 def gate_cmd(
@@ -128,9 +205,66 @@ def gate_cmd(
     console.print(f"\n[green]gate passed[/green] — overall={score_obj.overall:.2f}")
 
 
+def _infer_base_from_adapter_config(adapter_dir: Path) -> str | None:
+    """Read ``base_model_name_or_path`` from ``adapter_config.json``.
+
+    Returns ``None`` when the file is missing, malformed, or doesn't
+    expose the field. Used by ``sway check`` to make ``--base`` optional
+    in the common case where PEFT already wrote the base id on training
+    (D4).
+    """
+    cfg_path = adapter_dir / "adapter_config.json"
+    if not cfg_path.exists():
+        return None
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    base = data.get("base_model_name_or_path")
+    if isinstance(base, str) and base:
+        return base
+    return None
+
+
+def _check_banner(score_obj: SwayScore, result: SuiteResult) -> tuple[str, str]:
+    """Compute the (text, rich-style) check verdict banner (D12).
+
+    Calibrated on the delta_kl z-score: ≥3σ is green ("above noise"),
+    ≥1σ is yellow ("marginal"), and below that is red. When no z-score
+    is available (no null calibration ran), falls back to the raw
+    score band.
+    """
+    z = next(
+        (p.z_score for p in result.probes if p.kind == "delta_kl" and p.z_score is not None),
+        None,
+    )
+    if z is not None:
+        if z >= 3.0:
+            return f"✅ adapter is {z:+.2f}σ above noise", "bold green"
+        if z >= 1.0:
+            return f"⚠️ adapter is {z:+.2f}σ above noise — marginal", "bold yellow"
+        return f"❌ adapter is {z:+.2f}σ — indistinguishable from noise", "bold red"
+
+    # Fallback: composite score band.
+    if score_obj.overall >= 0.6:
+        return f"✅ adapter scored {score_obj.overall:.2f} — looks healthy", "bold green"
+    if score_obj.overall >= 0.3:
+        return f"⚠️ adapter scored {score_obj.overall:.2f} — partial fit", "bold yellow"
+    return f"❌ adapter scored {score_obj.overall:.2f} — noise band", "bold red"
+
+
 def check_cmd(
     adapter: Annotated[Path, typer.Argument(help="Path to a PEFT adapter directory.")],
-    base: Annotated[str, typer.Option("--base", help="HuggingFace base model id or local path.")],
+    base: Annotated[
+        str | None,
+        typer.Option(
+            "--base",
+            help=(
+                "HuggingFace base model id or local path. Inferred from "
+                "the adapter's ``adapter_config.json`` when omitted (D4)."
+            ),
+        ),
+    ] = None,
     prompts: Annotated[
         Path | None,
         typer.Option(
@@ -151,6 +285,22 @@ def check_cmd(
     from dlm_sway.suite.score import compute as compute_score
     from dlm_sway.suite.spec import SuiteDefaults, SuiteModels, SwaySpec
 
+    # D4: try to infer base model from adapter_config.json before
+    # erroring out on a missing --base.
+    if base is None:
+        inferred = _infer_base_from_adapter_config(adapter)
+        if inferred is None:
+            typer.secho(
+                f"error: --base not given and adapter at {adapter} doesn't carry a "
+                f"base_model_name_or_path in adapter_config.json. Pass --base "
+                f"explicitly.",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=2)
+        base = inferred
+        typer.secho(f"(inferred base model: {base})", err=True, fg=typer.colors.CYAN)
+
     quick_prompts = _load_prompts(prompts) if prompts else _BUILTIN_QUICK_PROMPTS
 
     base_spec = ModelSpec(base=base, kind="hf")
@@ -160,6 +310,9 @@ def check_cmd(
         models=SuiteModels(base=base_spec, ft=ft_spec),
         defaults=SuiteDefaults(seed=0),
         suite=[
+            # Calibrate first so delta_kl can publish a z-score the
+            # banner reads off.
+            {"name": "quick_null", "kind": "null_adapter", "runs": 3},
             {
                 "name": "quick_delta_kl",
                 "kind": "delta_kl",
@@ -184,7 +337,15 @@ def check_cmd(
     finally:
         _close_if_possible(backend)
     score_obj = compute_score(result)
-    report.to_terminal(result, score_obj, console=Console())
+
+    # D12: top-line banner before the full report so a user looking
+    # only at the first line still gets the verdict.
+    console = Console()
+    banner_text, banner_style = _check_banner(score_obj, result)
+    console.print()
+    console.print(banner_text, style=banner_style)
+    console.print()
+    report.to_terminal(result, score_obj, console=console)
 
 
 def diff_cmd(
@@ -508,5 +669,3 @@ def _close_if_possible(backend: object) -> None:
     close = getattr(backend, "close", None)
     if callable(close):
         close()
-
-
