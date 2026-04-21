@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -279,35 +280,60 @@ def doctor_cmd() -> None:
     console.print(f"  viz:       {_probe_import('matplotlib')}")
 
 
+class ReportFormat(StrEnum):
+    """Allowed values for ``sway report --format`` (D11).
+
+    Typer enforces the enum at parse time, so unknown formats produce
+    a clear ``Invalid value`` error instead of silently falling back
+    to the terminal renderer.
+    """
+
+    TERMINAL = "terminal"
+    MARKDOWN = "md"
+    MARKDOWN_LONG = "markdown"  # alias kept for muscle memory
+    JUNIT = "junit"
+    JSON = "json"
+
+
 def report_cmd(
     result_json: Annotated[Path, typer.Argument(help="Path to a saved result JSON.")],
     format: Annotated[
-        str, typer.Option("--format", help="Output format: terminal, md, junit, json.")
-    ] = "terminal",
+        ReportFormat,
+        typer.Option(
+            "--format",
+            help="Output format: terminal, md (alias: markdown), junit, or json.",
+        ),
+    ] = ReportFormat.TERMINAL,
 ) -> None:
-    """Re-render a previously saved run (for history tracking / dashboards)."""
+    """Re-render a previously saved run (for history tracking / dashboards).
+
+    The CLI deserializes the JSON back into the canonical
+    ``(SuiteResult, SwayScore)`` pair via :func:`report.from_json`,
+    then routes through the same renderers as a fresh ``sway run``.
+    Single source for every format keeps terminal / md / junit /
+    json output identical regardless of where they came from (B16).
+    """
+    from dlm_sway.suite import report
+
     raw: dict[str, Any] = json.loads(result_json.read_text(encoding="utf-8"))
-    fmt = format.lower()
-    if fmt == "json":
-        typer.echo(json.dumps(raw, indent=2, sort_keys=True))
+
+    if format is ReportFormat.JSON:
+        # Pass-through: the saved file *is* the canonical JSON. Re-emit
+        # via to_json against the round-tripped pair so any schema
+        # additions land consistently.
+        suite, score = report.from_json(raw)
+        typer.echo(report.to_json(suite, score))
         return
-    if fmt in {"md", "markdown"}:
-        # A file-level re-render needs the dataclasses back; simplest is
-        # to synthesize a minimal markdown from the JSON directly.
-        typer.echo(_render_markdown_from_json(raw))
+
+    suite, score = report.from_json(raw)
+    if format in (ReportFormat.MARKDOWN, ReportFormat.MARKDOWN_LONG):
+        typer.echo(report.to_markdown(suite, score))
         return
-    if fmt == "junit":
-        typer.echo(_render_junit_from_json(raw))
+    if format is ReportFormat.JUNIT:
+        typer.echo(report.to_junit(suite, score))
         return
-    # Default: terminal-ish one-liner summary.
-    score: dict[str, Any] = raw.get("score", {})
-    typer.echo(f"overall: {score.get('overall', 0.0):.2f}  [{score.get('band', '?')}]")
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    for p in probes:
-        typer.echo(
-            f"  {p['name']:<30}  {p['verdict']:<6}  "
-            f"{(p.get('score') or 0.0):.2f}  {p.get('message', '')[:60]}"
-        )
+    # ReportFormat.TERMINAL.
+    report.to_terminal(suite, score, console=Console())
 
 
 # -- helpers -----------------------------------------------------------
@@ -430,40 +456,3 @@ def _probe_import(name: str) -> str:
     return f"[green]{name}: {ver}[/green]"
 
 
-def _render_markdown_from_json(raw: dict[str, Any]) -> str:
-    score: dict[str, Any] = raw.get("score", {})
-    lines: list[str] = [
-        "# sway report",
-        "",
-        f"**Overall:** {score.get('overall', 0.0):.2f} (`{score.get('band', '?')}`)  ",
-        f"**Base:** `{raw.get('base_model_id', '?')}`  ",
-        f"**Adapter:** `{raw.get('adapter_id', '?')}`  ",
-        "",
-        "## Probes",
-        "",
-        "| name | kind | verdict | score |",
-        "|---|---|---|---:|",
-    ]
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    for p in probes:
-        lines.append(
-            f"| {p['name']} | `{p['kind']}` | {p['verdict']} | {(p.get('score') or 0.0):.2f} |"
-        )
-    return "\n".join(lines)
-
-
-def _render_junit_from_json(raw: dict[str, Any]) -> str:
-    """Minimal JUnit renderer from a saved JSON (useful for report --format junit)."""
-    import xml.etree.ElementTree as ET
-
-    probes: list[dict[str, Any]] = raw.get("probes", [])
-    testsuite = ET.Element("testsuite", {"name": "sway", "tests": str(len(probes))})
-    for p in probes:
-        tc = ET.SubElement(testsuite, "testcase", {"classname": p["kind"], "name": p["name"]})
-        if p["verdict"] == "fail":
-            ET.SubElement(tc, "failure", {"message": p.get("message", "")})
-        elif p["verdict"] == "error":
-            ET.SubElement(tc, "error", {"message": p.get("message", "")})
-        elif p["verdict"] == "skip":
-            ET.SubElement(tc, "skipped", {"message": p.get("message", "")})
-    return ET.tostring(testsuite, encoding="unicode")
