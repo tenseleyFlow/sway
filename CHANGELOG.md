@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### Sprint 17 — Adversarial paraphrase mining + outlier-prompt miner
+
+Closes Audit 01 innovation item F11. Adds `sway mine` — an evaluation
+companion to `paraphrase_invariance` that surfaces the paraphrases a
+memorizing adapter most reliably fails on, plus a secondary mode that
+ranks `delta_kl` prompts by per-prompt divergence.
+
+**`sway mine --mode paraphrase`** — per `paraphrase_invariance` case:
+
+1. Generate candidate paraphrases via nlpaug `SynonymAug` (WordNet,
+   deterministic under a fixed seed; back-translation is a user-supplied
+   escape hatch to keep the default fast and offline).
+2. Embed candidates through the shared MiniLM cache (same 80 MB load
+   `adapter_revert` pulls) and greedy farthest-first select the top-K
+   most pairwise-distant ones — dodges nlpaug's tendency to emit
+   near-duplicate synonym swaps.
+3. Rank by per-token lift gap: `(ft(prompt, gold) - base(prompt, gold))
+   - (ft(candidate, gold) - base(candidate, gold))`. Large positive gap
+   = the candidate breaks the adapter's lift = the adapter doesn't
+   generalize there.
+4. Emit `sway-mined-paraphrase.yaml` with a `mined_cases:` block paste-
+   compatible with `paraphrase_invariance.cases`.
+
+**`sway mine --mode outliers`** — rank a prompt pool by per-prompt
+`delta_kl.raw`. Pool defaults to the spec's own `delta_kl` prompts;
+`--from-corpus public_domain_en` draws from S09's CC0 corpus instead.
+Emits top-K and bottom-K blocks: the highest-divergence prompts (best
+for tightening a gate) and lowest-divergence (candidates to drop from
+the suite). `leakage` and `paraphrase_invariance` have section/case-
+based specs; outlier mining on those is future work, documented
+inline in `mining/outlier_miner.py`.
+
+- **New package** `src/dlm_sway/mining/` — two modules,
+  `paraphrase_miner.py` and `outlier_miner.py`, plus a thin
+  `corpus_prompts` helper for the `--from-corpus` path.
+- **New CLI subcommand** `sway mine SPEC --mode paraphrase|outliers
+  [--out FILE] [--top-k N] [--n-candidates N] [--from-corpus NAME]
+  [--seed N]`. Paste-compatible YAML emission by default; `--out`
+  overrides the filename.
+- **18 new unit tests** — 7 for the paraphrase miner (ranker,
+  diversity filter, dedup, input validation), 8 for the outlier
+  miner (delta_kl ranking, corpus wiring, unsupported-kind skip), 3
+  for the CLI (paraphrase + outliers modes + no-prompts error path).
+- **Prove-the-value test** at
+  `tests/unit/test_paraphrase_miner_prove_value.py`. On a
+  deliberately-memorizing dummy backend the hand-written paraphrase
+  list passes with `generalization_ratio > 0.5`; substituting the
+  mined list (same seed, same adapter) drops the ratio below 0.5
+  and flips the verdict to FAIL, with a ≥ 0.3 ratio gap.
+- **Dependency footprint**: no new extras. The paraphrase miner
+  uses nlpaug (already in `[style]`) + sentence-transformers (in
+  `[semsim]`); the diversity filter reuses the embedder
+  `adapter_revert` already pulls. Graceful `BackendNotAvailableError`
+  with a pip hint when the extras aren't installed.
+
 ### Sprint 20 — Audit 02 closure
 
 Closes the full finding inventory from `.docs/audits/02-followup-audit.md`

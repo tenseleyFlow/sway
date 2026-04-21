@@ -806,6 +806,218 @@ def trace_cmd(
         trace_analysis.render_terminal(report, console=Console())
 
 
+class MineMode(StrEnum):
+    """``sway mine`` operates in one of two modes."""
+
+    PARAPHRASE = "paraphrase"
+    OUTLIERS = "outliers"
+
+
+def mine_cmd(
+    spec: Annotated[Path, typer.Argument(help="Path to a sway.yaml spec.")],
+    mode: Annotated[
+        MineMode,
+        typer.Option(
+            "--mode",
+            help=(
+                "``paraphrase``: sharpen every paraphrase_invariance case with mined "
+                "adversarial paraphrases. ``outliers``: rank the spec's delta_kl prompts "
+                "(or a corpus-derived pool) by per-prompt raw."
+            ),
+        ),
+    ] = MineMode.PARAPHRASE,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            "-o",
+            help=(
+                "Where to write the mined YAML fragment. Defaults to "
+                "``sway-mined-<mode>.yaml`` in the current directory."
+            ),
+        ),
+    ] = None,
+    top_k: Annotated[
+        int,
+        typer.Option(
+            "--top-k", help="Keep the top-K candidates per case (paraphrase) or pool (outliers)."
+        ),
+    ] = 10,
+    n_candidates: Annotated[
+        int,
+        typer.Option(
+            "--n-candidates",
+            help=(
+                "Paraphrase mode only — generate this many raw candidates before the "
+                "diversity filter. Higher = more coverage at more wall-time cost."
+            ),
+        ),
+    ] = 50,
+    from_corpus: Annotated[
+        str | None,
+        typer.Option(
+            "--from-corpus",
+            help=(
+                "Outliers mode — draw the candidate pool from a packaged corpus "
+                "(``public_domain_en``) instead of the spec's own prompts."
+            ),
+        ),
+    ] = None,
+    seed: Annotated[
+        int,
+        typer.Option(
+            "--seed",
+            help=(
+                "Seed for the generator + probe RNGs. Keep fixed to reproduce a "
+                "previous mining run — nlpaug's synonym and back-translation picks "
+                "are deterministic under this seed."
+            ),
+        ),
+    ] = 0,
+) -> None:
+    """Mine adversarial paraphrases or outlier prompts from a spec.
+
+    **Paraphrase mode** (``--mode paraphrase``). For each
+    ``paraphrase_invariance`` case in the spec, generate candidate
+    paraphrases, diversity-filter them, and rank by the gap between
+    verbatim and paraphrased lift. The emitted YAML fragment contains
+    updated ``cases:`` that you can paste over the originals in your
+    spec — a memorizing adapter that passed the hand-written list will
+    typically fail the mined list.
+
+    **Outliers mode** (``--mode outliers``). Rank the spec's
+    ``delta_kl`` prompt pool (or a corpus-derived pool via
+    ``--from-corpus``) by per-prompt raw divergence. Emitted fragment
+    lists top-K and bottom-K prompts, split into two blocks.
+
+    The mined output is paste-compatible with the spec loader — no
+    schema bumps. Re-run ``sway gate`` after merging the mined list
+    to confirm the gate's behavior changed as expected.
+    """
+    import yaml
+
+    from dlm_sway.mining.outlier_miner import corpus_prompts, mine_outliers
+    from dlm_sway.mining.paraphrase_miner import mine_paraphrases
+    from dlm_sway.suite.loader import load_spec
+
+    loaded_spec = load_spec(spec)
+    out_path = out or Path(f"sway-mined-{mode.value}.yaml")
+
+    # Materialize the backend. Reuses ``_execute_spec``'s factory so the
+    # HF / API / MLX selection matches what ``sway run`` would do.
+    from dlm_sway.backends import build as build_backend
+
+    backend = build_backend(loaded_spec.models.ft)
+
+    if mode is MineMode.PARAPHRASE:
+        payload = _mine_paraphrase_payload(
+            loaded_spec,
+            backend,
+            mine_paraphrases,
+            top_k=top_k,
+            n_candidates=n_candidates,
+            seed=seed,
+        )
+    else:
+        candidate_pool = (
+            corpus_prompts(from_corpus) if from_corpus else _collect_delta_kl_prompts(loaded_spec)
+        )
+        if not candidate_pool:
+            typer.secho(
+                "sway mine --outliers: no candidate prompts found. Either add delta_kl "
+                "prompts to the spec or pass --from-corpus.",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=2)
+        result = mine_outliers(
+            probe_kind="delta_kl",
+            candidate_prompts=candidate_pool,
+            backend=backend,
+            top_k=top_k,
+            seed=seed,
+        )
+        payload = _outlier_result_to_yaml(result)
+
+    out_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    typer.echo(f"wrote {out_path}")
+
+
+def _mine_paraphrase_payload(
+    spec: Any,
+    backend: Any,
+    miner: Any,
+    *,
+    top_k: int,
+    n_candidates: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Run paraphrase mining on every paraphrase_invariance entry; shape into YAML."""
+    out_cases: list[dict[str, Any]] = []
+    for entry in spec.suite:
+        if entry.get("kind") != "paraphrase_invariance":
+            continue
+        for case in entry.get("cases", []):
+            prompt = case.get("prompt")
+            gold = case.get("gold")
+            if not prompt or not gold:
+                continue
+            mined = miner(
+                prompt=prompt,
+                gold=gold,
+                backend=backend,
+                n_candidates=n_candidates,
+                top_k=top_k,
+                seed=seed,
+            )
+            out_cases.append(
+                {
+                    "prompt": mined.seed_prompt,
+                    "gold": mined.gold,
+                    "paraphrases": [c.prompt for c in mined.candidates],
+                    "_mining_meta": {
+                        "top_gaps": [round(c.gap, 6) for c in mined.candidates],
+                        "verbatim_lift": (
+                            round(mined.candidates[0].verbatim_lift, 6)
+                            if mined.candidates
+                            else None
+                        ),
+                    },
+                }
+            )
+    return {"mined_cases": out_cases}
+
+
+def _collect_delta_kl_prompts(spec: Any) -> list[str]:
+    """Pull every ``delta_kl`` entry's prompt pool into one flat list."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in spec.suite:
+        if entry.get("kind") != "delta_kl":
+            continue
+        for p in entry.get("prompts", []):
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+    return out
+
+
+def _outlier_result_to_yaml(result: Any) -> dict[str, Any]:
+    """Format an :class:`OutlierResult` as a YAML-friendly dict."""
+    return {
+        "mined_outliers": {
+            "probe_kind": result.probe_kind,
+            "top": [
+                {"prompt": c.prompt, "raw": round(c.raw, 6), "index": c.index} for c in result.top
+            ],
+            "bottom": [
+                {"prompt": c.prompt, "raw": round(c.raw, 6), "index": c.index}
+                for c in result.bottom
+            ],
+        }
+    }
+
+
 # -- helpers -----------------------------------------------------------
 
 
