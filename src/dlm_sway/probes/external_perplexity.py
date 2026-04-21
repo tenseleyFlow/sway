@@ -40,6 +40,7 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._external_corpus import (
     available_corpora,
     chunk_corpus,
@@ -180,6 +181,7 @@ class ExternalPerplexityProbe(Probe):
         mean_delta = statistics.fmean(per_chunk_deltas)
         base_mean_per_tok = total_base_lp / max(total_base_tokens, 1)
         ft_mean_per_tok = total_ft_lp / max(total_ft_tokens, 1)
+        ci_95 = bootstrap_ci(per_chunk_deltas, seed=ctx.seed)
 
         # Null calibration is the preferred path. ``mean_delta`` is
         # higher-is-better (positive = ft assigns higher probability to
@@ -224,6 +226,8 @@ class ExternalPerplexityProbe(Probe):
                 "ft_mean_logprob_per_tok": ft_mean_per_tok,
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=message,
+            ci_95=ci_95,
         )
