@@ -137,6 +137,29 @@ def collect_missing_extras(suite: SuiteResult) -> list[str]:
     return sorted(found)
 
 
+def collect_null_opt_outs(suite: SuiteResult) -> list[str]:
+    """Probe kinds that opted out of null calibration.
+
+    ``null_adapter`` publishes ``evidence["skipped_kinds"]`` with the
+    probe kinds whose ``calibrate_spec`` returned ``None`` (e.g.
+    ``adapter_revert`` — no embedder on the null proxy;
+    ``prompt_collapse`` — noise can't fit an exponential decay).
+    Returns a deduplicated, sorted list of those kinds, or an empty
+    list when no null_adapter ran in the suite.
+    """
+    found: set[str] = set()
+    for p in suite.probes:
+        if p.kind != "null_adapter":
+            continue
+        skipped = p.evidence.get("skipped_kinds")
+        if not skipped:
+            continue
+        for kind in skipped:
+            if isinstance(kind, str):
+                found.add(kind)
+    return sorted(found)
+
+
 def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None = None) -> None:
     """Render the report to a rich Console (stdout by default)."""
     c = console or Console()
@@ -221,6 +244,21 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             Text(
                 f"{skipped_ct} probe(s) skipped due to missing extras: "
                 f"pip install 'dlm-sway[{','.join(extras)}]'",
+                style="dim",
+            )
+        )
+
+    # F15: null-calibration opt-outs rollup. Probes whose
+    # ``calibrate_spec`` returns ``None`` fall back to fixed-threshold
+    # verdicts. Surface the list in the footer so users understand
+    # why those rows read ``(no calibration)`` in the message column.
+    opt_outs = collect_null_opt_outs(suite)
+    if opt_outs:
+        c.print()
+        c.print(
+            Text(
+                f"{len(opt_outs)} probe(s) opted out of null calibration "
+                f"(using fixed thresholds): {', '.join(opt_outs)}",
                 style="dim",
             )
         )
@@ -479,6 +517,17 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
         buf.write(f"{skipped_ct} probe(s) skipped due to missing extras. Install with:\n\n")
         buf.write(f"```\npip install 'dlm-sway[{','.join(extras)}]'\n```\n")
 
+    # F15: null-calibration opt-outs rollup.
+    opt_outs = collect_null_opt_outs(suite)
+    if opt_outs:
+        buf.write("\n## Null-calibration opt-outs\n\n")
+        buf.write(
+            f"{len(opt_outs)} probe(s) fall back to fixed thresholds because "
+            f"their `calibrate_spec` returns `None`:\n\n"
+        )
+        for kind in opt_outs:
+            buf.write(f"- `{kind}`\n")
+
     return buf.getvalue()
 
 
@@ -542,6 +591,7 @@ def _bar(v: float, *, width: int = 10) -> str:
 
 __all__ = [
     "collect_missing_extras",
+    "collect_null_opt_outs",
     "format_duration_s",
     "format_raw",
     "format_score",
