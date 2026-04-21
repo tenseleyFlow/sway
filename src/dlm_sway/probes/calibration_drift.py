@@ -24,6 +24,7 @@ from typing import Literal
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.core.stats import bootstrap_ci
 from dlm_sway.probes._calibration_pack import BUILT_IN_PACK
 from dlm_sway.probes._zscore import (
     no_calibration_note,
@@ -124,6 +125,12 @@ class CalibrationDriftProbe(Probe):
 
         frac_regressed = regressed / len(items)
         mean_delta = statistics.fmean(deltas)
+        # S14 F9: CI on the fraction — bootstrap over per-item
+        # regression indicators (1 if regressed, 0 otherwise). The
+        # bootstrap mean = frac_regressed by construction, so the CI
+        # brackets the reported ``raw`` value.
+        regression_indicators = [1.0 if d < -spec.regression_nats else 0.0 for d in deltas]
+        ci_95 = bootstrap_ci(regression_indicators, seed=ctx.seed)
 
         # Lower-is-better probe: negate the z-score so the shared
         # ``z >= assert_z_gte`` semantics mean "adapter is σ *better*
@@ -179,8 +186,10 @@ class CalibrationDriftProbe(Probe):
                 "regression_nats_threshold": spec.regression_nats,
                 "weight": spec.weight,
                 "z_by_rank": z_by_rank,
+                "raw_ci_95": list(ci_95) if ci_95 is not None else None,
             },
             message=message,
+            ci_95=ci_95,
         )
 
 
