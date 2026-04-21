@@ -49,7 +49,13 @@ class CalibrationDriftSpec(ProbeSpec):
     """Source of items. ``"builtin"`` uses :data:`BUILT_IN_PACK`. Custom
     packs will ship via a file reference in a later milestone."""
     items_limit: int | None = None
-    """If set, truncate the pack to this many items (for fast runs)."""
+    """Truncate the pack to the first ``N`` items (for fast runs).
+
+    The built-in pack is 200 items as of Sprint 05 (B12). Setting
+    ``items_limit=30`` reproduces the resolution of the original 30-item
+    pack, where each regressed item moves the fraction by ~3.3 pp; full
+    200 items moves it by ~0.5 pp, which is the resolution the default
+    ``assert_fraction_regressed_lt=0.15`` gate was tuned for."""
     assert_fraction_regressed_lt: float = 0.15
     assert_mean_delta_gte: float = -0.5
     """Mean per-token logprob delta (ft − base) across the pack. Slightly
