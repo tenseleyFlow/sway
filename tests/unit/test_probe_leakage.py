@@ -31,6 +31,64 @@ class TestPerturb:
     def test_drop_punct_removes_punct(self) -> None:
         assert _perturb("a, b. c!", "drop_punct") == "a b c"
 
+    def test_synonym_swap_replaces_first_known_word(self) -> None:
+        # "important" → "significant" per the curated table.
+        out = _perturb("This is an important fact.", "synonym_swap")
+        assert "important" not in out
+        assert "significant" in out
+
+    def test_synonym_swap_preserves_capitalization(self) -> None:
+        # Capitalized "Important" → "Significant" (capitalized).
+        out = _perturb("Important news today.", "synonym_swap")
+        assert out.startswith("Significant")
+
+    def test_synonym_swap_passthrough_when_no_match(self) -> None:
+        # No words in our table appear here.
+        text = "Xyzzy frobnitz quux."
+        assert _perturb(text, "synonym_swap") == text
+
+    def test_clause_reverse_swaps_around_comma(self) -> None:
+        out = _perturb("First clause, second clause.", "clause_reverse")
+        # "second clause" + ", " + "First clause"
+        assert out == "second clause, First clause"
+
+    def test_clause_reverse_passthrough_when_no_separator(self) -> None:
+        text = "One simple clause."
+        assert _perturb(text, "clause_reverse") == text
+
+    def test_prefix_inject_prepends_neutral_lead_in(self) -> None:
+        out = _perturb("The model said hello.", "prefix_inject")
+        assert out.startswith("I think that ")
+        # The original first letter gets lower-cased so the sentence reads
+        # naturally after the inserted lead-in.
+        assert out == "I think that the model said hello."
+
+    def test_register_shift_lowers_uppercase_head(self) -> None:
+        out = _perturb("Hello WORLD this is a sentence with rest.", "register_shift")
+        assert out[:30] == "hello world this is a sentence"
+
+    def test_register_shift_uppers_lowercase_head(self) -> None:
+        out = _perturb("hello world this is a sentence with rest.", "register_shift")
+        assert out[:30] == "HELLO WORLD THIS IS A SENTENCE"
+
+
+class TestPerturbationsConfigurable:
+    def test_default_perturbations_is_seven(self) -> None:
+        from dlm_sway.probes.leakage import _default_perturbations
+
+        assert len(_default_perturbations()) == 7
+
+    def test_spec_perturbations_field_subset(self) -> None:
+        """A spec can request a subset; default is all seven."""
+        probe, spec = build_probe(
+            {
+                "name": "lk",
+                "kind": "leakage",
+                "perturbations": ["typo", "synonym_swap"],
+            }
+        )
+        assert spec.perturbations == ["typo", "synonym_swap"]
+
 
 class TestFragility:
     def test_zero_when_clean_zero(self) -> None:
@@ -59,11 +117,22 @@ def _backend(*, ft_recall: float, ft_perturbed_recall: float) -> DummyDifferenti
     ft_pert = target[: int(ft_perturbed_recall * len(target))]
 
     base = DummyResponses()
+    # Cover the prompt at every default perturbation so the probe
+    # doesn't KeyError on a missing canned response. After B11 the
+    # default set has 7 entries.
+    perturbations = (
+        "typo",
+        "case_flip",
+        "drop_punct",
+        "synonym_swap",
+        "clause_reverse",
+        "prefix_inject",
+        "register_shift",
+    )
     ft = DummyResponses(
         generations={
             content[:128]: ft_full,
-            # perturbations of the first 128 chars hit these three:
-            **{_perturb(content[:128], p): ft_pert for p in ("typo", "case_flip", "drop_punct")},
+            **{_perturb(content[:128], p): ft_pert for p in perturbations},
         }
     )
     return DummyDifferentialBackend(base=base, ft=ft), content
