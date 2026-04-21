@@ -55,3 +55,27 @@ class TestCalibrationDrift:
         # Each worst-offender record carries prompt/gold/delta fields.
         if worst:
             assert {"prompt", "gold", "delta"} <= set(worst[0].keys())
+
+
+class TestPackContract:
+    """B12: pack must be 200 items and well-formed."""
+
+    def test_pack_size_is_200(self) -> None:
+        assert len(BUILT_IN_PACK) == 200
+
+    def test_pack_items_are_well_formed(self) -> None:
+        """Each item is a (str, str) pair with non-empty gold."""
+        for idx, item in enumerate(BUILT_IN_PACK):
+            assert isinstance(item, tuple), f"item {idx}: not a tuple"
+            assert len(item) == 2, f"item {idx}: not a pair"
+            prompt, gold = item
+            assert isinstance(prompt, str) and prompt, f"item {idx}: bad prompt"
+            assert isinstance(gold, str) and gold, f"item {idx}: bad gold"
+
+    def test_items_limit_subsets_pack(self) -> None:
+        """``items_limit`` truncates to the first N items deterministically."""
+        backend = _backend(delta_per_token=0.0)
+        probe, spec = build_probe({"name": "c2", "kind": "calibration_drift", "items_limit": 50})
+        ctx = RunContext(backend=backend)
+        result = probe.run(spec, ctx)
+        assert result.evidence["total_items"] == 50
