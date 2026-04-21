@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import Field
@@ -277,7 +278,7 @@ def _backend_identity(backend: Any) -> str | None:
     return str(value) if value else None
 
 
-def get_null_stats(ctx: RunContext, probe_kind: str) -> dict[str, float] | None:
+def get_null_stats(ctx: RunContext, probe_kind: str) -> Mapping[str, float] | None:
     """Look up null-adapter stats for ``probe_kind`` in the run context.
 
     Returns ``{"mean": …, "std": …, "n": …}`` when calibration ran for

@@ -16,6 +16,7 @@ as the source so error messages localize to the offending entry.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -65,7 +66,10 @@ class RunContext:
     null_stats:
         Null-adapter baseline stats for z-score calibration, keyed by
         probe *kind*. Populated by the runner after it's executed the
-        ``null_adapter`` probe (if configured).
+        ``null_adapter`` probe (if configured). Typed as a read-only
+        :class:`~collections.abc.Mapping` and constructed from a
+        ``MappingProxyType`` so probes can't accidentally mutate the
+        stats other probes will consume.
     downstream_kinds:
         Tuple of probe kinds that appear *after* the current probe in
         the suite. Populated by the runner before each probe runs;
@@ -78,7 +82,7 @@ class RunContext:
     top_k: int = 256
     sections: tuple[Section, ...] | None = None
     doc_text: str | None = None
-    null_stats: dict[str, dict[str, float]] = field(default_factory=dict)
+    null_stats: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
     downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
 
 

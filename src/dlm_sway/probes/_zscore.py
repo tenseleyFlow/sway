@@ -13,6 +13,7 @@ The helpers here are tiny but load-bearing — they're the one place the
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from typing import TypedDict
 
 from dlm_sway.core.result import Verdict
@@ -32,7 +33,7 @@ class NullStats(TypedDict):
 MIN_STD: float = 1e-6
 
 
-def z_score(raw: float, stats: NullStats | dict[str, float] | None) -> float | None:
+def z_score(raw: float, stats: Mapping[str, float] | None) -> float | None:
     """Compute ``(raw - mean) / std`` against a null-adapter baseline.
 
     Returns ``None`` when:
