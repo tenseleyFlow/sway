@@ -28,7 +28,14 @@ from numpy.typing import NDArray
 from pydantic import Field
 
 from dlm_sway.core.result import ProbeResult, Verdict, safe_finalize
+from dlm_sway.probes._zscore import (
+    no_calibration_note,
+    score_from_z,
+    verdict_from_z,
+    z_score,
+)
 from dlm_sway.probes.base import Probe, ProbeSpec, RunContext
+from dlm_sway.probes.null_adapter import get_null_stats
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
@@ -98,6 +105,9 @@ class StyleFingerprintSpec(ProbeSpec):
     """Minimum cosine shift for PASS. ``0.25`` is a deliberately
     permissive default — stylistic shift is a weaker signal than
     perplexity lift."""
+    assert_z_gte: float = 3.0
+    """Z-score pass criterion against the null-adapter baseline, when it
+    exists. Preferred over the raw threshold."""
 
 
 class StyleFingerprintProbe(Probe):
@@ -182,10 +192,26 @@ class StyleFingerprintProbe(Probe):
             )
 
         shift = _projection_shift(base_fp, ft_fp, doc_fp)
-        verdict = Verdict.PASS if shift >= spec.assert_shift_gte else Verdict.FAIL
-        # Score: 0 at no shift, 1 when ft moves a full doc-gap toward
-        # doc; clamp to [0, 1].
-        score = float(np.clip(shift, 0.0, 1.0))
+
+        stats = get_null_stats(ctx, spec.kind)
+        z = z_score(shift, stats)
+        verdict_z = verdict_from_z(z, spec.assert_z_gte)
+        if verdict_z is not None:
+            verdict = verdict_z
+            score_val = score_from_z(z)
+            score = score_val if score_val is not None else 0.0
+            message = f"style_shift={shift:+.2f}, z={z:+.2f}σ vs null"
+        else:
+            verdict = Verdict.PASS if shift >= spec.assert_shift_gte else Verdict.FAIL
+            # Score: 0 at no shift, 1 when ft moves a full doc-gap toward
+            # doc; clamp to [0, 1].
+            score = float(np.clip(shift, 0.0, 1.0))
+            message = (
+                f"style_shift={shift:+.2f} "
+                f"({'toward' if shift > 0 else 'away from'} doc, "
+                f"threshold={spec.assert_shift_gte}) "
+                f"{no_calibration_note(spec.kind)}"
+            )
 
         return safe_finalize(
             name=spec.name,
@@ -193,6 +219,7 @@ class StyleFingerprintProbe(Probe):
             verdict=verdict,
             score=score,
             raw=shift,
+            z_score=z,
             evidence={
                 "base_fp": base_fp.tolist(),
                 "ft_fp": ft_fp.tolist(),
@@ -200,11 +227,7 @@ class StyleFingerprintProbe(Probe):
                 "style_shift": shift,
                 "weight": spec.weight,
             },
-            message=(
-                f"style_shift={shift:+.2f} "
-                f"({'toward' if shift > 0 else 'away from'} doc, "
-                f"threshold={spec.assert_shift_gte})"
-            ),
+            message=message,
         )
 
 
