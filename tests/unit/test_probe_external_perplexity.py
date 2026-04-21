@@ -191,7 +191,24 @@ class TestCalibrateSpec:
 
 class TestNullCalibrationEndToEnd:
     def test_runner_threads_null_stats_to_external_perplexity(self) -> None:
-        """null_adapter → external_perplexity gets a z_score in the suite."""
+        """null_adapter → external_perplexity — the runner threads the
+        per-kind null stats into the downstream probe's context.
+
+        Post-F02 (Audit 03), the dummy backend's ``rolling_logprob``
+        isn't seed-sensitive, so null-calibration runs of
+        ``external_perplexity`` produce identical raws across seeds.
+        That's a legitimately-degenerate null (``std == 0``), and the
+        F02 fix now surfaces that as ``degenerate: 1.0`` in the stats
+        dict. Downstream ``z_score`` correctly refuses to divide by a
+        lifted std, and the probe takes the fixed-threshold fallback.
+
+        What THIS test pins is the runner threading contract: regardless
+        of whether the z-score fires, ``null_stats`` must reach the
+        suite result + the probe's message must surface the
+        ``(no calibration for ...)`` tag when the null is degenerate.
+        A regression in threading would drop ``null_stats`` from the
+        suite result entirely.
+        """
         from dlm_sway.suite.runner import run as run_suite
         from dlm_sway.suite.spec import SwaySpec
 
@@ -209,7 +226,7 @@ class TestNullCalibrationEndToEnd:
                         "name": "ext",
                         "kind": "external_perplexity",
                         "max_chunks": 3,
-                        "assert_z_gte": -100.0,  # permissive
+                        "assert_mean_delta_gte": -100.0,  # permissive fixed threshold
                     },
                 ],
             }
@@ -219,11 +236,16 @@ class TestNullCalibrationEndToEnd:
         null_result = result.probes[0]
         ext_result = result.probes[1]
         assert null_result.verdict == Verdict.PASS
-        # External-perplexity should have taken the z-score path because
-        # null_adapter populated per-kind stats for it.
-        assert ext_result.z_score is not None, (
-            "external_perplexity should have z-scored against null baseline, "
-            f"got evidence={ext_result.evidence}, message={ext_result.message}"
-        )
-        # Raw z-score path puts "higher-is-better" wording in the message.
-        assert "higher-is-better" in (ext_result.message or "")
+
+        # F02 — the runner threads null_stats into suite.null_stats
+        # even when the null is degenerate. The probe sees the stats
+        # dict (with ``degenerate: 1.0``) and chooses the fallback
+        # path itself.
+        assert "external_perplexity" in result.null_stats
+        ext_null = result.null_stats["external_perplexity"]
+        assert ext_null.get("degenerate", 0.0) >= 0.5
+        # Probe fell back to fixed thresholds; z_score is None, and
+        # the message carries the (no calibration) tag the S02 report
+        # layer uses to annotate the row.
+        assert ext_result.z_score is None
+        assert "no calibration for external_perplexity" in (ext_result.message or "")
