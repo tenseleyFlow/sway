@@ -137,6 +137,25 @@ class TestRollingLogprob:
         assert r.total_logprob == 0.0
 
 
+class TestGenerate:
+    def test_greedy_generation_returns_string(
+        self, hf_backend: HuggingFaceDifferentialBackend
+    ) -> None:
+        with hf_backend.as_base() as b:
+            out = b.generate("Hello", max_new_tokens=8, seed=0)
+        assert isinstance(out, str)
+        assert len(out) > 0
+
+    def test_sampled_generation_obeys_seed(
+        self, hf_backend: HuggingFaceDifferentialBackend
+    ) -> None:
+        """``temperature > 0`` engages the sampling path (do_sample=True)."""
+        with hf_backend.as_base() as b:
+            a = b.generate("The future of AI is", max_new_tokens=8, temperature=0.7, seed=7)
+            b1 = b.generate("The future of AI is", max_new_tokens=8, temperature=0.7, seed=7)
+        assert a == b1, f"sampled generation not deterministic at seed=7: {a!r} vs {b1!r}"
+
+
 class TestNextTokenDist:
     def test_top_k_dist_finite_and_sorted(self, hf_backend: HuggingFaceDifferentialBackend) -> None:
         with hf_backend.as_base() as b:
