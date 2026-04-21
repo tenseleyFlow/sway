@@ -180,6 +180,38 @@ report footer prints the achieved class — `strict` (CUDA), `best_effort`
 (CPU/MPS), or `loose` (deterministic algorithms refused). Same seed +
 same host = bit-identical scoring across runs.
 
+## Pytest integration
+
+For teams already testing their training pipeline with pytest, sway
+ships a plugin behind the `[pytest]` extra. A single decorator turns
+one pytest function into one test item per probe plus an optional
+composite-score gate:
+
+```python
+import pytest
+
+@pytest.mark.sway(spec="sway.yaml", threshold=0.6)
+def test_adapter_healthy() -> None:
+    """The decorator owns the body — a bare pass is conventional."""
+```
+
+`pytest -v` then reports:
+
+```
+test_sway_gate.py::test_adapter_healthy::adherence    PASSED
+test_sway_gate.py::test_adapter_healthy::calibration  PASSED
+test_sway_gate.py::test_adapter_healthy::__gate__     PASSED
+```
+
+`--junitxml` emits one `<testcase>` per probe, `pytest -k adherence`
+runs just that probe, `FAIL` / `ERROR` / `SKIP` verdicts translate to
+pytest outcomes. See `examples/pytest_integration/` for a full
+before/after walkthrough.
+
+```bash
+pip install 'dlm-sway[hf,pytest]'
+```
+
 ## The `.dlm` integration
 
 If you trained your adapter via the [DocumentLanguageModel
