@@ -210,6 +210,10 @@ module = [
     "matplotlib.*",
     "plotly",
     "plotly.*",
+    "tenacity",
+    "tenacity.*",
+    "httpx",
+    "httpx.*",
     "huggingface_hub.*",
     "dlm.*",
 ]
