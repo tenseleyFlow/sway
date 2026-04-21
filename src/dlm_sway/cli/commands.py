@@ -478,10 +478,17 @@ def autogen_cmd(
 _DOCTOR_BACKENDS: dict[str, tuple[str, ...]] = {
     "hf": ("torch", "transformers", "peft"),
     "mlx": ("mlx", "mlx_lm"),
-    "semsim": ("sentence_transformers",),
+    # ``sklearn`` is S16's cluster_kl dep; shipped under [semsim] so it
+    # rides the same 80 MB MiniLM load adapter_revert already pulls.
+    "semsim": ("sentence_transformers", "sklearn"),
     "style": ("spacy", "textstat", "nlpaug"),
     "dlm": ("dlm",),
-    "viz": ("matplotlib",),
+    # ``plotly`` is the load-bearing dep for ``sway report --format html``;
+    # S12 docs listed it but doctor never probed it before F04.
+    "viz": ("matplotlib", "plotly"),
+    # S13 API backend.
+    "api": ("httpx", "tenacity"),
+    "pytest": ("pytest",),
 }
 
 
