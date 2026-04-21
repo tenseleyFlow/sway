@@ -7,6 +7,7 @@ the full probe path without loading a real model.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dlm_sway.backends.dummy import DummyDifferentialBackend, DummyResponses
 from dlm_sway.core.result import Verdict
@@ -89,6 +90,85 @@ class TestShapeMetrics:
         sat, reason = _saturation_lambda(lambdas, divs)
         assert sat is None
         assert reason == "flat_curve"
+
+    def test_saturation_monotonically_decreasing(self) -> None:
+        """A curve that goes *down* with λ — adapter is anti-correlated
+        with its own effect (the degenerate case where lam=1 is closer
+        to base than lam=0)."""
+        lambdas = np.asarray([0.0, 0.5, 1.0, 1.25], dtype=np.float64)
+        divs = np.asarray([0.9, 0.6, 0.3, 0.1], dtype=np.float64)
+        sat, reason = _saturation_lambda(lambdas, divs)
+        # max is at λ=0 → smallest λ where divs ≥ 0.9*0.9=0.81 is λ=0 itself.
+        assert sat == 0.0
+        # Curve is strictly decreasing; the monotonic-non-decreasing check
+        # on divs[:0+1] is trivially satisfied (length 1), so we classify
+        # as "found" — the probe's overshoot / linearity checks pick up
+        # the real pathology here.
+        assert reason == "found"
+
+
+class TestProbeVerdictPropagatesSaturationReason:
+    """C8 + B3 test side: the probe's ``evidence["saturation_reason"]``
+    reflects the helper's return value for each curve shape. We force
+    specific curves by monkeypatching the probe's ``divergence()`` call
+    so the tests are deterministic and cheap."""
+
+    def _run_with_curve(self, divs_by_lambda: list[float]) -> dict:
+        from dlm_sway.probes import adapter_ablation as ab_mod
+
+        lambdas = [0.0, 0.25, 0.5, 0.75, 1.0, 1.25]
+        assert len(lambdas) == len(divs_by_lambda)
+        call_count = {"i": 0}
+
+        def _fake_divergence(a, b, *, kind):  # noqa: ANN001 — test-local
+            del a, b, kind
+            # One prompt × len(lambdas) invocations; round-robin the curve.
+            idx = call_count["i"] % len(lambdas)
+            call_count["i"] += 1
+            return divs_by_lambda[idx]
+
+        backend = _diverging_backend()
+        probe, spec = build_probe(
+            {
+                "name": "abl",
+                "kind": "adapter_ablation",
+                "prompts": ["q1"],
+                "lambdas": lambdas,
+                "assert_linearity_gte": 0.0,
+                "assert_overshoot_gte": 0.0,
+            }
+        )
+        ctx = RunContext(backend=backend)
+        mp = pytest.MonkeyPatch()
+        mp.setattr(ab_mod, "divergence", _fake_divergence)
+        try:
+            result = probe.run(spec, ctx)
+        finally:
+            mp.undo()
+        return dict(result.evidence)
+
+    def test_flat_curve_surfaces_flat_reason(self) -> None:
+        ev = self._run_with_curve([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        assert ev["saturation_reason"] == "flat_curve"
+        assert ev["saturation_lambda"] is None
+
+    def test_healthy_monotonic_curve_found(self) -> None:
+        ev = self._run_with_curve([0.0, 0.3, 0.6, 0.85, 0.95, 1.0])
+        assert ev["saturation_reason"] == "found"
+        assert ev["saturation_lambda"] is not None
+
+    def test_overshoot_dip_still_found_via_max_reference(self) -> None:
+        """B3 fix: curve peaks at λ=0.75, dips at λ=1.0, recovers at 1.25."""
+        ev = self._run_with_curve([0.0, 0.3, 0.6, 0.95, 0.7, 1.0])
+        # max=1.0 at λ=1.25 → 0.9*1.0 = 0.9 → smallest λ where div ≥ 0.9
+        # is λ=0.75 (div=0.95). Monotonic through 0.75 → "found".
+        assert ev["saturation_reason"] == "found"
+        assert ev["saturation_lambda"] == 0.75
+
+    def test_non_monotonic_before_saturation(self) -> None:
+        ev = self._run_with_curve([0.0, 0.6, 0.4, 0.95, 1.0, 1.05])
+        assert ev["saturation_reason"] == "non_monotonic"
+        assert ev["saturation_lambda"] == 0.75
 
 
 def _diverging_backend() -> DummyDifferentialBackend:
