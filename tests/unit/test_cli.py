@@ -90,3 +90,170 @@ def test_autogen_without_dlm_extra_exits_nonzero(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr(builtins, "__import__", fake_import)
     result = CliRunner().invoke(app, ["autogen", "any.dlm"])
     assert result.exit_code != 0
+
+
+# -- Sprint 06 additions ----------------------------------------------
+
+
+class TestDoctorJson:
+    """D7: ``sway doctor --json`` must emit a parseable payload."""
+
+    def test_json_is_parseable(self) -> None:
+        result = CliRunner().invoke(app, ["doctor", "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert "sway_version" in payload
+        assert "python" in payload
+        assert "platform" in payload
+        assert "extras" in payload
+        # Every extra bucket is a mapping of module → version-or-null.
+        assert set(payload["extras"]) >= {"hf", "mlx", "semsim", "style", "dlm", "viz"}
+
+
+class TestListProbes:
+    """D6: ``sway list-probes`` prints the registered kinds."""
+
+    def test_emits_every_shipped_kind(self) -> None:
+        result = CliRunner().invoke(app, ["list-probes"])
+        assert result.exit_code == 0
+        for kind in (
+            "delta_kl",
+            "adapter_revert",
+            "prompt_collapse",
+            "section_internalization",
+            "paraphrase_invariance",
+            "preference_flip",
+            "style_fingerprint",
+            "calibration_drift",
+            "leakage",
+            "adapter_ablation",
+            "null_adapter",
+        ):
+            assert kind in result.stdout
+
+
+class TestReportFormatEnum:
+    """D11: unknown ``--format`` surfaces a clear error, not silent terminal."""
+
+    def test_unknown_format_rejected(self, tmp_path: Path) -> None:
+        result_path = tmp_path / "r.json"
+        result_path.write_text(
+            json.dumps(
+                {
+                    "sway_version": "0",
+                    "base_model_id": "b",
+                    "adapter_id": "a",
+                    "score": {"overall": 0.0, "band": "noise", "components": {}, "findings": []},
+                    "probes": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = CliRunner().invoke(app, ["report", str(result_path), "--format", "csv"])
+        assert result.exit_code != 0
+        combined = (result.stdout or "") + (result.output or "")
+        assert "csv" in combined.lower() or "invalid" in combined.lower()
+
+
+class TestCheckBaseInference:
+    """D4: ``sway check`` reads base_model_name_or_path from adapter_config.json."""
+
+    def test_reads_base_from_adapter_config(self, tmp_path: Path) -> None:
+        from dlm_sway.cli.commands import _infer_base_from_adapter_config
+
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(
+            json.dumps({"base_model_name_or_path": "HuggingFaceTB/SmolLM2-135M-Instruct"}),
+            encoding="utf-8",
+        )
+        assert _infer_base_from_adapter_config(adapter) == "HuggingFaceTB/SmolLM2-135M-Instruct"
+
+    def test_returns_none_when_config_missing(self, tmp_path: Path) -> None:
+        from dlm_sway.cli.commands import _infer_base_from_adapter_config
+
+        assert _infer_base_from_adapter_config(tmp_path) is None
+
+    def test_returns_none_when_field_missing(self, tmp_path: Path) -> None:
+        from dlm_sway.cli.commands import _infer_base_from_adapter_config
+
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text(json.dumps({"rank": 8}), encoding="utf-8")
+        assert _infer_base_from_adapter_config(adapter) is None
+
+    def test_returns_none_when_config_malformed(self, tmp_path: Path) -> None:
+        from dlm_sway.cli.commands import _infer_base_from_adapter_config
+
+        adapter = tmp_path / "adapter"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text("{ not json", encoding="utf-8")
+        assert _infer_base_from_adapter_config(adapter) is None
+
+
+class TestCheckBanner:
+    """D12: ``_check_banner`` maps z-score to the right verdict tier."""
+
+    def _suite_with_z(self, z_value: float | None) -> tuple:
+        from datetime import UTC, datetime
+
+        from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
+
+        now = datetime.now(UTC)
+        probes = (
+            ProbeResult(
+                name="dk",
+                kind="delta_kl",
+                verdict=Verdict.PASS if z_value and z_value >= 3 else Verdict.FAIL,
+                score=0.5,
+                z_score=z_value,
+            ),
+        )
+        suite = SuiteResult(
+            spec_path="<t>",
+            started_at=now,
+            finished_at=now,
+            base_model_id="b",
+            adapter_id="a",
+            sway_version="0.0.0",
+            probes=probes,
+        )
+        score = SwayScore(
+            overall=0.5,
+            components={"adherence": 0.5},
+            band="partial",
+        )
+        return suite, score
+
+    def test_high_z_is_green(self) -> None:
+        from dlm_sway.cli.commands import _check_banner
+
+        suite, score = self._suite_with_z(4.5)
+        text, style = _check_banner(score, suite)
+        assert "✅" in text
+        assert "above noise" in text
+        assert "green" in style
+
+    def test_marginal_z_is_yellow(self) -> None:
+        from dlm_sway.cli.commands import _check_banner
+
+        suite, score = self._suite_with_z(1.5)
+        text, style = _check_banner(score, suite)
+        assert "⚠️" in text
+        assert "yellow" in style
+
+    def test_low_z_is_red(self) -> None:
+        from dlm_sway.cli.commands import _check_banner
+
+        suite, score = self._suite_with_z(0.3)
+        text, style = _check_banner(score, suite)
+        assert "❌" in text
+        assert "red" in style
+
+    def test_missing_z_falls_back_to_composite(self) -> None:
+        from dlm_sway.cli.commands import _check_banner
+
+        suite, score = self._suite_with_z(None)
+        text, _style = _check_banner(score, suite)
+        # No "σ above noise" language when we don't have a z-score.
+        assert "σ" not in text
