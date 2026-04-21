@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly slow-lane run at 07:00 UTC.
+    - cron: "0 7 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast-lane:
+    # Unit tests + lint + type check. Runs on every push, every PR.
+    name: fast (unit + lint + mypy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Create venv
+        run: uv venv --python 3.11 .venv
+
+      # ``uv sync`` resolves every optional-dependency group to write a
+      # universal lockfile, which fails because ``[dlm]`` depends on
+      # the not-yet-published ``dlm`` package. ``uv pip install -e``
+      # only installs what's named — matches the README's documented
+      # install path and keeps CI honest about what users see.
+      - name: Install dev deps (core only — no heavy extras)
+        run: uv pip install -e "." --group dev
+
+      - name: ruff check
+        run: uv run --no-sync ruff check src tests
+
+      - name: ruff format check
+        run: uv run --no-sync ruff format --check src tests
+
+      - name: mypy strict
+        run: uv run --no-sync mypy src
+
+      - name: pytest (unit)
+        run: uv run --no-sync pytest tests/unit --no-header -v
+
+  changes:
+    # Decides whether the slow lane runs on this PR. A backend touch or
+    # an integration-test touch triggers it; otherwise the nightly cron
+    # is the sole slow-lane driver.
+    name: detect backend/integration changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      backend_touched: ${{ steps.filter.outputs.backend_touched }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend_touched:
+              - 'src/dlm_sway/backends/**'
+              - 'tests/integration/**'
+              - 'pyproject.toml'
+
+  slow-lane:
+    # Integration tests (slow + online). Runs on: schedule, manual
+    # dispatch, or when the change-filter flags a backend / integration
+    # diff. Skipped on vanilla PRs that only touch probes / docs.
+    name: slow (integration, HF backend)
+    needs: [changes]
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && needs.changes.outputs.backend_touched == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HF_HUB_DISABLE_PROGRESS_BARS: "1"
+      TRANSFORMERS_VERBOSITY: "error"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Create venv
+        run: uv venv --python 3.11 .venv
+
+      - name: Install dev + hf extras
+        run: uv pip install -e ".[hf]" --group dev
+
+      - name: pytest (slow + online)
+        run: uv run --no-sync pytest tests/integration -m "slow or online" --no-header -v

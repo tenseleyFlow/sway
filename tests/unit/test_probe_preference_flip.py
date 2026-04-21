@@ -130,6 +130,56 @@ def test_warn_when_too_few_base_wrong() -> None:
     assert result.verdict == Verdict.WARN
 
 
+def test_warn_branch_score_formula_pinned() -> None:
+    """C10: pin the WARN-branch numerical formula so a refactor notices.
+
+    Formula: ``score = clip(0.5 + mean_delta / 4.0, 0, 1)`` where
+    ``mean_delta`` is the average of ``(ft_margin - base_margin)`` over
+    every triple. With deltas [+1.0, +0.5, +1.0] the mean is 0.8333…
+    so the score is 0.5 + 0.8333.../4 = 0.70833….
+    """
+    import math
+
+    backend = _backend(
+        [
+            ("p1", "good1", "bad1", 1.0, 2.0),  # delta=+1.0 (base right)
+            ("p2", "good2", "bad2", 0.5, 1.0),  # delta=+0.5 (base right)
+            ("p3", "good3", "bad3", -0.5, 0.5),  # delta=+1.0 (base wrong)
+        ]
+    )
+    triples = [
+        {"prompt": p, "chosen": c, "rejected": r}
+        for p, c, r in [
+            ("p1", "good1", "bad1"),
+            ("p2", "good2", "bad2"),
+            ("p3", "good3", "bad3"),
+        ]
+    ]
+    probe, spec = build_probe(
+        {
+            "name": "pf",
+            "kind": "preference_flip",
+            "triples": triples,
+            "min_triples_for_decision": 3,
+        }
+    )
+    ctx = RunContext(backend=backend)
+    result = probe.run(spec, ctx)
+
+    assert result.verdict == Verdict.WARN
+    expected_mean_delta = (1.0 + 0.5 + 1.0) / 3.0
+    expected_score = 0.5 + expected_mean_delta / 4.0
+    assert result.raw is not None
+    assert math.isclose(result.raw, expected_mean_delta, rel_tol=1e-9)
+    assert result.score is not None
+    assert math.isclose(result.score, expected_score, rel_tol=1e-9)
+
+    # Evidence mirrors the raw metric so report consumers can render it.
+    assert math.isclose(result.evidence["mean_margin_delta"], expected_mean_delta, rel_tol=1e-9)
+    assert result.evidence["base_wrong"] == 1
+    assert result.evidence["total"] == 3
+
+
 def test_triples_pulled_from_sections() -> None:
     pref_section = Section(
         id="p1",

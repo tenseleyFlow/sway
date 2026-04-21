@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+### Sprint 04 — Integration & regression testing
+
+Closes Audit 01 findings C1, C2, C5, C6, C7, C8, C10, C11, C12, B3
+(test side), B15.
+
+- **Slow lane runs end-to-end** (C1): the `huggingface_hub` dev dep
+  added in S01 is verified; `pytest -m "slow or online"` now executes
+  every checked-in integration test from a clean clone.
+- **HF backend coverage 21% → 91%** (C2) — measured combined fast +
+  slow lane against `dlm_sway.backends.hf`. New tests:
+  - `tests/integration/test_hf_adapter_toggle.py` extended with a
+    bit-identical ft → base → ft roundtrip (B15 mitigation).
+  - `tests/integration/test_hf_scaled_adapter.py`: λ sweep
+    monotonicity + `LoraLayer.scaling[key]` restoration on clean exit
+    AND on exception.
+  - `tests/integration/test_hf_null_adapter.py`: same-seed
+    determinism, different-seeds divergence, original adapter
+    restoration on clean exit AND on exception.
+  - `tests/integration/test_hf_scoring.py`: `logprob_of` (incl.
+    zero-token-completion → ProbeError), `rolling_logprob`,
+    `next_token_dist`, `_HFView.generate` (greedy + sampled-with-seed
+    determinism).
+  - `tests/unit/test_backend_hf_helpers.py`: direct unit coverage on
+    `_resolve_dtype` and `_detect_device` so dtype regressions are
+    caught in the fast lane.
+- **MLX smoke test** (C5): `tests/integration/test_mlx_smoke.py`
+  exercises `MLXDifferentialBackend` on darwin-arm64 with a small
+  LoRA adapter. Skips cleanly on non-darwin / non-arm64 / no-mlx_lm
+  / missing-fixture. Reproducible adapter builder ships at
+  `tests/fixtures/build_mlx_adapter.py` (run once on a Mac to
+  populate the fixture directory).
+- **`sway gate` exit code pinned** (C6):
+  `tests/integration/test_sway_gate_exit_code.py` covers PASS
+  (exit 0), FAIL verdict (exit 1), and below-threshold-with-passing
+  verdicts (exit 1) via Typer's `CliRunner`.
+- **`dlm` import ban regression-guarded** (C7):
+  `tests/unit/test_dlm_not_imported.py` patches every `dlm.*` entry in
+  `sys.modules` to `None` and asserts the dummy suite runs end-to-end
+  without ImportError, plus that `sway autogen` surfaces a clean
+  install-hint error rather than a stack trace.
+- **Pathological probe coverage** (C8 + B3 test side):
+  `tests/unit/test_probe_adapter_ablation.py` now drives
+  monotonically-decreasing curves through the helper and pins
+  probe-level `evidence["saturation_reason"]` for flat / found /
+  overshoot-with-dip / non_monotonic shapes via a monkeypatched
+  `divergence`.
+- **WARN-branch numerical formula pinned** (C10):
+  `test_warn_branch_score_formula_pinned` in
+  `tests/unit/test_probe_preference_flip.py` asserts the exact
+  `score = 0.5 + mean_delta / 4.0` formula with a hand-computed
+  expected value.
+- **Disjoint top-k divergence** (C12):
+  `test_disjoint_top_k_supports_produce_finite_divergence` in
+  `tests/unit/test_divergence.py` covers the
+  `aligned_probs` tail-redistribution path against fully-disjoint
+  base / ft supports — JS comes out finite and approaches its
+  theoretical ln(2) bound.
+- **Report schema snapshots** (C11): `tests/unit/test_report_snapshot.py`
+  byte-compares `to_json` / `to_markdown` / `to_junit` against
+  checked-in snapshots under `tests/snapshots/`. Intentional schema
+  bumps: `SWAY_UPDATE_SNAPSHOTS=1 uv run pytest …` and commit the
+  updated files. No new dep — hand-rolled diff helper.
+- **CI workflow shipped**: `.github/workflows/ci.yml` runs the fast
+  lane (unit + lint + mypy) on every push / PR, and the slow lane
+  (integration, HF backend) on schedule (nightly 07:00 UTC), manual
+  dispatch, push to main, and PRs that touch `src/dlm_sway/backends/`,
+  `tests/integration/`, or `pyproject.toml`.
+
 ### Sprint 03 — Documentation truth & dead code
 
 Closes Audit 01 findings P03, P04, P05, P07 (doc), P08, P09, P10, P14,
