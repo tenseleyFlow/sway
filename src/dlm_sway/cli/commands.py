@@ -306,6 +306,14 @@ def check_cmd(
 
     Runs A1 DeltaKL + C2 CalibrationDrift on a small prompt set. No
     spec file required.
+
+    **Banner semantics (F20 clarification).** The ``+N.NNσ above noise``
+    header appears only when ``null_adapter`` actually calibrated this
+    run — i.e., when the backend implements ``NullCalibratedBackend``.
+    Without null calibration (non-HF backends like the HTTP API or MLX
+    inference), the banner falls back to the composite score band
+    ("healthy", "partial fit", "noise band") and the σ wording is
+    suppressed to avoid a false-precision claim.
     """
     from dlm_sway.backends import build as build_backend
     from dlm_sway.core.model import ModelSpec
