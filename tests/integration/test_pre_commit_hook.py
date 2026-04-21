@@ -94,9 +94,7 @@ def _build_random_lora_adapter(base_dir: Path, out_dir: Path) -> None:
 
 
 @pytest.fixture(scope="module")
-def hook_adapter(
-    tiny_model_dir: Path, tmp_path_factory: pytest.TempPathFactory
-) -> Path:
+def hook_adapter(tiny_model_dir: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     adapter_dir = tmp_path_factory.mktemp("precommit-hook-adapter")
     _build_random_lora_adapter(tiny_model_dir, adapter_dir)
     return adapter_dir
@@ -159,9 +157,7 @@ def _write_config(config_path: Path, spec_rel: str) -> None:
 
 
 @pytest.fixture
-def precommit_repo(
-    tmp_path: Path, tiny_model_dir: Path, hook_adapter: Path
-) -> Iterator[Path]:
+def precommit_repo(tmp_path: Path, tiny_model_dir: Path, hook_adapter: Path) -> Iterator[Path]:
     """Initialize a tmp git repo with a spec + pre-commit config.
 
     Yields the repo root. The spec file lives at
