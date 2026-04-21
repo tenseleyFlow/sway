@@ -27,6 +27,7 @@ from rich.table import Table
 from rich.text import Text
 
 from dlm_sway.core.result import ProbeResult, SuiteResult, SwayScore, Verdict
+from dlm_sway.probes._zscore import format_z_profile
 
 _VERDICT_STYLE = {
     Verdict.PASS: "bold green",
@@ -73,6 +74,23 @@ def format_z(v: float | int | None) -> str:
     if v is None or not math.isfinite(float(v)):
         return _NONE_GLYPH
     return f"{float(v):+,.2f}σ"
+
+
+def _message_with_rank_profile(r: ProbeResult) -> str:
+    """Append the per-rank z-profile to a probe's message when present.
+
+    Renders as ``"<message> | rank profile: +4.2σ @ 1x / +6.8σ @ 0.5x"``.
+    When the probe didn't run under multi-rank calibration (``z_by_rank``
+    is ``None`` or has a single rank), returns the message unchanged.
+    """
+    base = r.message or ""
+    z_by_rank = r.evidence.get("z_by_rank")
+    if not z_by_rank or len(z_by_rank) < 2:
+        return base
+    profile = format_z_profile(z_by_rank)
+    if not profile:
+        return base
+    return f"{base} | rank profile: {profile}" if base else f"rank profile: {profile}"
 
 
 def format_duration_s(v: float | int | None) -> str:
@@ -170,7 +188,7 @@ def to_terminal(suite: SuiteResult, score: SwayScore, *, console: Console | None
             format_score(r.score),
             format_raw(r.raw),
             format_z(r.z_score),
-            Text(r.message or ""),
+            Text(_message_with_rank_profile(r)),
         )
     c.print(detail)
 
@@ -415,7 +433,7 @@ def to_markdown(suite: SuiteResult, score: SwayScore) -> str:
     for r in suite.probes:
         # Escape pipes in messages so markdown doesn't treat them as
         # column separators. Leading/trailing whitespace collapsed.
-        note = (r.message or "").replace("|", "\\|").replace("\n", " ").strip()
+        note = _message_with_rank_profile(r).replace("|", "\\|").replace("\n", " ").strip()
         buf.write(
             f"| {r.name} | `{r.kind}` | {r.verdict.value} | "
             f"{format_score(r.score)} | {format_raw(r.raw)} | {format_z(r.z_score)} | "
