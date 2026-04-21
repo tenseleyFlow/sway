@@ -52,8 +52,8 @@ import numpy as np
 
 from dlm_sway.backends._instrumentation import BackendInstrumentation
 from dlm_sway.core.errors import ProbeError
-from dlm_sway.core.model import LoadedModel, Model
-from dlm_sway.core.scoring import RollingLogprob, TokenDist
+from dlm_sway.core.model import LoadedModel
+from dlm_sway.core.scoring import RollingLogprob, ScoringModel, TokenDist
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -383,7 +383,7 @@ class ApiScoringBackend:
     #    toggling). Not required by the Protocol.
 
     @contextmanager
-    def as_base(self) -> Iterator[Model]:
+    def as_base(self) -> Iterator[ScoringModel]:
         """Yield ``self`` as a Model/ScoringBackend view.
 
         The API backend has no distinction between "base" and "ft"; a
@@ -394,7 +394,7 @@ class ApiScoringBackend:
         yield self  # Model is a Protocol; self satisfies it structurally
 
     @contextmanager
-    def as_finetuned(self) -> Iterator[Model]:
+    def as_finetuned(self) -> Iterator[ScoringModel]:
         """Same view as :meth:`as_base` — see that docstring."""
         yield self
 
