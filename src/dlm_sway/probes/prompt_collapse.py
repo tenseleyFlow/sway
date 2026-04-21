@@ -55,6 +55,18 @@ class PromptCollapseProbe(Probe):
     spec_cls = PromptCollapseSpec
     category = "adherence"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> PromptCollapseSpec | None:
+        from dlm_sway.probes.base import SENTINEL_PROMPTS
+
+        return PromptCollapseSpec(
+            name="_calibration",
+            kind="prompt_collapse",
+            prompts=list(SENTINEL_PROMPTS[:2]),  # 2 prompts × 3 lengths = 6 forward passes
+            context_lengths=[0, 256, 512],
+            top_k=ctx.top_k,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, PromptCollapseSpec)
         if not spec.prompts:

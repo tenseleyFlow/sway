@@ -52,6 +52,17 @@ class DeltaKLProbe(Probe):
     spec_cls = DeltaKLSpec
     category = "adherence"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> DeltaKLSpec | None:
+        from dlm_sway.probes.base import SENTINEL_PROMPTS
+
+        return DeltaKLSpec(
+            name="_calibration",
+            kind="delta_kl",
+            prompts=list(SENTINEL_PROMPTS),
+            top_k=ctx.top_k,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, DeltaKLSpec)
         if not spec.prompts:

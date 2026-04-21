@@ -49,6 +49,24 @@ class PreferenceFlipProbe(Probe):
     spec_cls = PreferenceFlipSpec
     category = "attribution"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> PreferenceFlipSpec | None:
+        # Sentinel triples. On a random-init adapter the flip rate
+        # should be ~0.5 (chance), with a small std across seeds —
+        # a useful null distribution for user suites that configure
+        # a stricter threshold.
+        del ctx
+        return PreferenceFlipSpec(
+            name="_calibration",
+            kind="preference_flip",
+            triples=[
+                PreferenceTriple(prompt="The best pet is", chosen="a loyal dog", rejected="a rock"),
+                PreferenceTriple(prompt="A good answer is", chosen="thoughtful", rejected="loud"),
+                PreferenceTriple(prompt="The next step is", chosen="careful", rejected="reckless"),
+            ],
+            min_triples_for_decision=2,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, PreferenceFlipSpec)
         triples = list(spec.triples) or _triples_from_sections(ctx)

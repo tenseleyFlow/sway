@@ -58,6 +58,29 @@ class ParaphraseInvarianceProbe(Probe):
     spec_cls = ParaphraseInvarianceSpec
     category = "attribution"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> ParaphraseInvarianceSpec | None:
+        # Sentinel cases — Q/A pair with templated paraphrases. Doesn't
+        # need to be semantically meaningful, just well-formed for the
+        # null distribution math.
+        del ctx
+        return ParaphraseInvarianceSpec(
+            name="_calibration",
+            kind="paraphrase_invariance",
+            cases=[
+                ParaphraseCase(
+                    prompt="The capital of France is",
+                    gold=" Paris",
+                    paraphrases=["What's the capital of France?", "Tell me about France's capital."],
+                ),
+                ParaphraseCase(
+                    prompt="Two plus two equals",
+                    gold=" four",
+                    paraphrases=["Sum of two and two:", "Add 2 and 2:"],
+                ),
+            ],
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, ParaphraseInvarianceSpec)
         if not spec.cases:

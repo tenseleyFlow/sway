@@ -105,6 +105,19 @@ class StyleFingerprintProbe(Probe):
     spec_cls = StyleFingerprintSpec
     category = "calibration"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> StyleFingerprintSpec | None:
+        del ctx
+        from dlm_sway.probes.base import SENTINEL_DOC, SENTINEL_PROMPTS
+
+        return StyleFingerprintSpec(
+            name="_calibration",
+            kind="style_fingerprint",
+            prompts=list(SENTINEL_PROMPTS),
+            doc_reference=SENTINEL_DOC,
+            max_new_tokens=64,  # faster than default
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, StyleFingerprintSpec)
         if not spec.prompts:

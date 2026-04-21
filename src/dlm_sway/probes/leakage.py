@@ -51,6 +51,19 @@ class LeakageSusceptibilityProbe(Probe):
     spec_cls = LeakageSusceptibilitySpec
     category = "calibration"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> LeakageSusceptibilitySpec | None:
+        # Needs PROSE sections; without them this probe can't run at all.
+        if ctx.sections is None or not any(s.kind == "prose" for s in ctx.sections):
+            return None
+        return LeakageSusceptibilitySpec(
+            name="_calibration",
+            kind="leakage",
+            prefix_chars=64,  # smaller than default to keep calibration fast
+            continuation_chars=128,
+            max_new_tokens=48,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, LeakageSusceptibilitySpec)
         if ctx.sections is None:

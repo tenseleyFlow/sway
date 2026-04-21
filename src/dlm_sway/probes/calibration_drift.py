@@ -58,6 +58,16 @@ class CalibrationDriftProbe(Probe):
     spec_cls = CalibrationDriftSpec
     category = "calibration"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> CalibrationDriftSpec | None:
+        del ctx
+        # Use the built-in pack but capped to keep calibration fast.
+        return CalibrationDriftSpec(
+            name="_calibration",
+            kind="calibration_drift",
+            items_limit=10,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, CalibrationDriftSpec)
         items = list(spec.items) if spec.items else list(BUILT_IN_PACK)

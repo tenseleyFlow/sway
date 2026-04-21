@@ -58,6 +58,17 @@ class SectionInternalizationProbe(Probe):
     spec_cls = SectionInternalizationSpec
     category = "attribution"
 
+    @classmethod
+    def calibrate_spec(cls, ctx: RunContext) -> SectionInternalizationSpec | None:
+        # Needs sections; if the bridge didn't populate them, opt out.
+        if ctx.sections is None or len(ctx.sections) < 2:
+            return None
+        return SectionInternalizationSpec(
+            name="_calibration",
+            kind="section_internalization",
+            per_section_threshold=0.05,
+        )
+
     def run(self, spec: ProbeSpec, ctx: RunContext) -> ProbeResult:
         assert isinstance(spec, SectionInternalizationSpec)
         if ctx.sections is None or len(ctx.sections) == 0:
