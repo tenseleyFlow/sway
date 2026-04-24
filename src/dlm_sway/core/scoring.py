@@ -20,6 +20,7 @@ double memory and halve throughput.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
@@ -127,6 +128,27 @@ class ScoringBackend(Protocol):
         full-vocab KL.
         """
         ...
+
+    def next_token_dist_batch(
+        self, prompts: Sequence[str], *, top_k: int = 256
+    ) -> list[TokenDist]:
+        """Batched variant of :meth:`next_token_dist`.
+
+        Returns one :class:`TokenDist` per entry in ``prompts``, in the
+        same order. Backends with real batching support (HF, MLX)
+        amortize kernel-launch + memory-transfer cost across the batch
+        — a 3-5× speedup for KL-style probes.
+
+        The default implementation on this Protocol loops over
+        :meth:`next_token_dist`; backends that don't benefit from
+        batching (``dummy``, ``api``) can inherit the default and
+        ignore this method. Implementations that override MUST produce
+        results numerically identical to the per-prompt path within a
+        tight float32 tolerance — the S07 cache is consulted
+        per-prompt before the batch is built so callers can mix cached
+        and uncached prompts in one call without surprise drift.
+        """
+        return [self.next_token_dist(p, top_k=top_k) for p in prompts]
 
 
 @runtime_checkable
