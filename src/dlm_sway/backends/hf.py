@@ -17,7 +17,7 @@ validation.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +81,33 @@ def _require_hf() -> tuple[Any, Any, Any]:
             "hf", extra="hf", hint="peft is required for the adapter toggle."
         ) from exc
     return torch, transformers, peft
+
+
+# --- internal helpers -----------------------------------------------------
+
+
+def _topk_to_token_dist(log_probs: Any, *, top_k: int) -> TokenDist:
+    """Build a :class:`TokenDist` from a 1-D ``log_probs`` torch Tensor.
+
+    Shared by the single-prompt and batched paths so the tail-mass
+    accounting (B6) stays identical across both.
+    """
+    import torch
+
+    vocab = int(log_probs.shape[0])
+    k = min(top_k, vocab)
+    top = torch.topk(log_probs, k=k)
+    if k == vocab:
+        tail_logprob: float | None = None
+    else:
+        tail_mass = float(1.0 - torch.exp(top.values).sum().item())
+        tail_logprob = float(np.log(tail_mass)) if tail_mass > 1e-12 else 0.0
+    return TokenDist(
+        token_ids=top.indices.cpu().numpy().astype(np.int64),
+        logprobs=top.values.cpu().numpy().astype(np.float32),
+        vocab_size=vocab,
+        tail_logprob=tail_logprob,
+    )
 
 
 # --- the view object ------------------------------------------------------
@@ -225,21 +252,52 @@ class _HFView:
         with torch.inference_mode():
             logits = self._model(ids).logits[:, -1, :]  # (1, V)
         log_probs = F.log_softmax(logits.float(), dim=-1).squeeze(0)
-        vocab = int(log_probs.shape[0])
-        k = min(top_k, vocab)
-        top = torch.topk(log_probs, k=k)
-        # B6: distinguish "no tail" (k covers vocab) from "measurable tail"
-        # from "underflowed-to-zero tail." See TokenDist.tail_logprob docs.
-        if k == vocab:
-            tail_logprob: float | None = None
-        else:
-            tail_mass = float(1.0 - torch.exp(top.values).sum().item())
-            tail_logprob = float(np.log(tail_mass)) if tail_mass > 1e-12 else 0.0
-        return TokenDist(
-            token_ids=top.indices.cpu().numpy().astype(np.int64),
-            logprobs=top.values.cpu().numpy().astype(np.float32),
-            vocab_size=vocab,
-            tail_logprob=tail_logprob,
+        return _topk_to_token_dist(log_probs, top_k=top_k)
+
+    def next_token_dist_batch(
+        self, prompts: Sequence[str], *, top_k: int = 256
+    ) -> list[TokenDist]:
+        """Batched forward via tokenizer left-padding.
+
+        Decoder-only LMs need left-padding because the last-token
+        position (what :meth:`next_token_dist` reads) must line up with
+        the actual end of each sequence. Right-padding would put the
+        pad token at the end and read garbage logits. We set
+        ``padding_side="left"`` on the tokenizer call explicitly —
+        independent of any instance-wide setting the tokenizer may
+        carry for other code paths.
+
+        Cache-per-prompt: the instrumentation's :meth:`cached_batch`
+        checks the LRU for every prompt and only forwards the misses
+        through the batch. That means a mixed workload (e.g. the
+        second ``as_base`` view after a run saw the same prompts)
+        pays near-zero cost.
+        """
+        if not prompts:
+            return []
+
+        def compute_misses(miss_indices: list[int]) -> list[TokenDist]:
+            import torch
+            import torch.nn.functional as F
+
+            miss_prompts = [prompts[i] for i in miss_indices]
+            tokens = self._tokenizer(
+                miss_prompts,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+            ).to(self._device)
+            input_ids = tokens["input_ids"]
+            with torch.inference_mode():
+                logits = self._model(
+                    input_ids=input_ids,
+                    attention_mask=tokens.get("attention_mask"),
+                ).logits[:, -1, :]  # (B, V) — left-pad makes "last" always the real last token
+            log_probs = F.log_softmax(logits.float(), dim=-1)  # (B, V)
+            return [_topk_to_token_dist(log_probs[row], top_k=top_k) for row in range(len(miss_prompts))]
+
+        return self._inst.cached_batch(
+            "next_token_dist", self.id, list(prompts), top_k, compute_misses
         )
 
 
