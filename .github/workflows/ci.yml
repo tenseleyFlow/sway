@@ -120,8 +120,12 @@ jobs:
       - name: Create venv
         run: uv venv --python 3.11 .venv
 
-      - name: Install dev + hf extras
-        run: uv pip install -e ".[hf]" --group dev
+      # ``[semsim]`` pulls scikit-learn + sentence-transformers; without
+      # it, test_cluster_kl_e2e.py (S16) silently skips with
+      # "No module named 'sklearn'". The cluster_kl probe is a shipped
+      # primitive — its integration test belongs in the slow lane.
+      - name: Install dev + hf + semsim extras
+        run: uv pip install -e ".[hf,semsim]" --group dev
 
       - name: pytest (slow + online)
         run: uv run --no-sync pytest tests/integration -m "slow or online" --no-header -v
