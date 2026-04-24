@@ -47,18 +47,39 @@ HOOKS_PATH = REPO_ROOT / ".pre-commit-hooks.yaml"
 
 
 def test_pre_commit_hooks_yaml_is_valid() -> None:
-    """Smoke: ``.pre-commit-hooks.yaml`` parses and declares the two
-    expected hooks. Cheap — runs without network — and catches
-    structural drift before the slow-lane invocation."""
+    """Smoke: ``.pre-commit-hooks.yaml`` parses and declares the three
+    expected hooks (system / isolated-venv / docker_image). Cheap —
+    runs without network — and catches structural drift before the
+    slow-lane invocation."""
     assert HOOKS_PATH.exists(), f"missing {HOOKS_PATH}"
     hooks = yaml.safe_load(HOOKS_PATH.read_text(encoding="utf-8"))
     assert isinstance(hooks, list)
     ids = [h["id"] for h in hooks]
-    assert ids == ["sway-gate", "sway-gate-isolated"], f"unexpected hook ids: {ids}"
+    assert ids == [
+        "sway-gate",
+        "sway-gate-isolated",
+        "sway-gate-docker",
+    ], f"unexpected hook ids: {ids}"
+
     system_hook = next(h for h in hooks if h["id"] == "sway-gate")
     assert system_hook["language"] == "system"
     assert system_hook["pass_filenames"] is False
     assert system_hook["entry"] == "sway gate"
+
+    isolated_hook = next(h for h in hooks if h["id"] == "sway-gate-isolated")
+    assert isolated_hook["language"] == "python"
+    # Post-F05: the isolated variant pins the PyPI wheel, not a git SHA.
+    assert any(
+        dep.startswith("dlm-sway[hf]==") for dep in isolated_hook["additional_dependencies"]
+    ), f"isolated hook deps lost PyPI pin: {isolated_hook['additional_dependencies']!r}"
+
+    docker_hook = next(h for h in hooks if h["id"] == "sway-gate-docker")
+    assert docker_hook["language"] == "docker_image"
+    assert docker_hook["pass_filenames"] is False
+    # Entry is "<image> <cmd>" — first token is the image, rest is argv.
+    assert docker_hook["entry"].startswith("ghcr.io/tenseleyflow/sway-gate:"), (
+        f"docker hook image path changed: {docker_hook['entry']!r}"
+    )
 
 
 def _build_random_lora_adapter(base_dir: Path, out_dir: Path) -> None:

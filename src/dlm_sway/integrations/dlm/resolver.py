@@ -13,13 +13,29 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from dlm_sway.core.errors import SwayError
+from dlm_sway.core.errors import DlmCompatError, SwayError
 from dlm_sway.core.sections import (
     Section,
     SectionKind,
     SectionPreference,
     SectionProbe,
 )
+
+
+def _installed_dlm_version() -> str | None:
+    """Best-effort lookup of the installed ``dlm`` package version.
+
+    Returns ``None`` when dlm isn't installed or metadata is missing;
+    the returned string is informational (attached to
+    ``DlmCompatError`` messages), never used for programmatic
+    branching.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("dlm")
+    except Exception:  # noqa: BLE001 — metadata lookup is best-effort
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +103,14 @@ def _resolve_base_model_to_hf_id(base_model: str) -> str:
     resolve to ``HuggingFaceTB/SmolLM2-135M-Instruct``. sway's backends
     call ``AutoModelForCausalLM.from_pretrained`` directly and need the
     HF id. The ``hf:org/name`` escape hatch passes through unchanged.
+
+    Behavior when ``dlm`` is not installed: return the raw key
+    unchanged; the downstream backend load will surface a clean "not
+    a valid HF id" error. Behavior when ``dlm`` is installed but its
+    public surface drifts (e.g. ``.hf_id`` renamed to ``.repo_id``):
+    raise :class:`DlmCompatError` — silent fallback here would hand
+    the backend the raw registry key and produce a confusing
+    "model not found" error far from the root cause.
     """
     if base_model.startswith("hf:"):
         return base_model[len("hf:") :]
@@ -96,9 +120,19 @@ def _resolve_base_model_to_hf_id(base_model: str) -> str:
         return base_model
     try:
         spec = resolve_base(base_model)
-    except Exception:  # noqa: BLE001 — unknown dlm errors
-        return base_model
-    hf_id = getattr(spec, "hf_id", None)
+    except Exception as exc:  # noqa: BLE001 — unknown dlm errors
+        raise DlmCompatError(
+            f"dlm.base_models.resolve({base_model!r}) raised {type(exc).__name__}: {exc}",
+            installed_dlm_version=_installed_dlm_version(),
+        ) from exc
+    if not hasattr(spec, "hf_id"):
+        raise DlmCompatError(
+            f"dlm.base_models.resolve({base_model!r}) returned "
+            f"{type(spec).__name__} without the expected 'hf_id' attribute "
+            f"(attrs seen: {sorted(a for a in dir(spec) if not a.startswith('_'))[:8]!r})",
+            installed_dlm_version=_installed_dlm_version(),
+        )
+    hf_id = spec.hf_id
     return str(hf_id) if hf_id else base_model
 
 

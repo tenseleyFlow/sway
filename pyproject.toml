@@ -1,6 +1,6 @@
 [project]
 name = "dlm-sway"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Differential testing for fine-tuned causal LMs: did LoRA/QLoRA training actually change behavior, or is the model defaulting to the pretrained base?"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -69,8 +69,12 @@ semsim = [
     "scikit-learn>=1.4",
 ]
 # Optional .dlm integration. Only imported inside dlm_sway.integrations.dlm.
+# Upper bound pins to the major pre-1.0 range the integration test
+# (tests/integration/test_dlm_api_compat.py) has validated against —
+# bump when dlm cuts v1.0 and the resolver's ``.hf_id`` contract is
+# re-verified.
 dlm = [
-    "dlm>=0.9",
+    "dlm>=0.9,<1.0",
 ]
 # OpenAI-compatible HTTP scoring backend (S13 / F7). Unlocks hosted
 # fine-tunes (OpenAI platform, vLLM serve, Ollama) without pulling

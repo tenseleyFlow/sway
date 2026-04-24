@@ -2,10 +2,8 @@
 
 Differential testing for fine-tuned causal language models.
 
-> **⚠️ Pre-alpha — not on PyPI yet.** This project is in active
-> development and has **not** been published to PyPI. `pip install dlm-sway`
-> will not work. The wheel name is reserved for when publication happens;
-> see [Install](#install-from-source) for how to use sway today.
+> **Alpha — v0.1.0 on PyPI.** API is not stable; semantic versioning
+> applies only from v1.0 onward. Feedback + issues welcome.
 
 **One question:** *did LoRA/QLoRA training actually change model behavior
 in a meaningful way, or is the model just defaulting to the pretrained
@@ -15,25 +13,24 @@ base?*
 purpose-built primitives, each z-scored against a null-adapter baseline.
 No LLM judges. No external APIs. Deterministic on CPU where possible.
 
-> **Naming convention (for when PyPI goes live).** The source repo and
-> CLI entry point are both `sway`. The PyPI wheel will be `dlm-sway`
-> because the short `sway` name is already taken on PyPI by an unrelated
-> project. The CLI installed by `pip install dlm-sway` will be
-> `sway` — mismatched wheel/command names are a PyPA convention (see
-> `pyyaml` → `import yaml`).
+> **Naming convention.** The source repo and CLI entry point are both
+> `sway`. The PyPI wheel is `dlm-sway` because the short `sway` name is
+> taken on PyPI by an unrelated project. The CLI installed by
+> `pip install dlm-sway` is `sway` — mismatched wheel/command names are
+> a PyPA convention (see `pyyaml` → `import yaml`).
 
-## Install from source
-
-Until the wheel lands on PyPI, install editable from a clone:
+## Install
 
 ```bash
-git clone https://github.com/tenseleyFlow/sway.git
-cd sway
+# HF + PEFT backend — required for real models
+pip install "dlm-sway[hf]"
 
-# Create a venv and install with the HF backend extras
-uv venv --python 3.11 .venv      # or: python -m venv .venv
-source .venv/bin/activate
-uv pip install -e ".[hf]" --group dev
+# Extras composable as usual
+pip install "dlm-sway[hf,style,semsim]"
+pip install "dlm-sway[all]"
+
+# .dlm auto-suite generation (requires the DLM sibling project)
+pip install "dlm-sway[dlm]"
 ```
 
 Available extras:
@@ -53,19 +50,18 @@ sway --version
 sway doctor
 ```
 
-## Planned PyPI install (not live yet)
+## Install from source
 
-Once the wheel ships the install story will be the single-line flavor:
+For the development HEAD (unreleased changes, contributor workflow):
 
 ```bash
-# ⚠️ NOT FUNCTIONAL YET — post-PyPI-publish only
-pip install "dlm-sway[hf]"
-pip install "dlm-sway[hf,style,semsim]"
-pip install "dlm-sway[all]"
-pip install "dlm-sway[dlm]"
-```
+git clone https://github.com/tenseleyFlow/sway.git
+cd sway
 
-Watch the repo's Releases for the first published tag.
+uv venv --python 3.11 .venv      # or: python -m venv .venv
+source .venv/bin/activate
+uv pip install -e ".[hf]" --group dev
+```
 
 ## 90-second smoke test
 
@@ -217,37 +213,37 @@ pip install 'dlm-sway[hf,pytest]'
 ## Pre-commit
 
 For teams using [pre-commit.com](https://pre-commit.com), sway ships
-a `.pre-commit-hooks.yaml` declaring two hooks that run `sway gate`
+a `.pre-commit-hooks.yaml` declaring three hooks that run `sway gate`
 before every commit touching a spec, `.dlm` document, or adapter
 file. Add 4–5 lines to your `.pre-commit-config.yaml`:
 
 ```yaml
 repos:
   - repo: https://github.com/tenseleyFlow/sway
-    rev: 2ecd9a0c9d65a9b9576a185597c88f41444f9646  # pin to a SHA
+    rev: v0.1.0
     hooks:
       - id: sway-gate
         args: ["sway.yaml", "--threshold=0.6"]
 ```
 
-Two variants ship; pick whichever fits your install posture:
+Three variants ship; pick whichever fits your install posture:
 
 | Hook | When to use | First-run cost |
 |---|---|---|
 | `sway-gate` | you already ran `pip install 'dlm-sway[hf]'` | ~none — uses the sway binary on your `PATH` |
 | `sway-gate-isolated` | fresh venv, no existing sway install | ~2 min + ~5 GB — pre-commit builds a fresh venv and installs sway + torch + transformers |
+| `sway-gate-docker` | zero-install hosts with docker available | ~1 min — pulls `ghcr.io/tenseleyflow/sway-gate:v0.1.0` (torch baked in, MiniLM weights pre-cached) |
 
 The recommended default is `sway-gate`. Switch to
 `sway-gate-isolated` if you can't rely on a host-level sway install.
+Reach for `sway-gate-docker` on ephemeral CI runners where docker is
+cheaper than a fresh venv.
 
 ### Rev pinning
 
-The example above pins to a commit SHA. Sway is pre-v0.1.0 — no
-tagged release yet. Pinning to `HEAD` would silently drift your
-gate's behavior under every `pre-commit autoupdate`; a SHA is the
-honest pre-release pattern. Bump it deliberately when you want to
-pick up upstream changes. After sway publishes v0.1.0 the recipe
-switches to `rev: v0.1.0` and the SHA churn stops.
+The example above pins to the `v0.1.0` tag. Bump it deliberately
+when you want to pick up a new release; `pre-commit autoupdate` will
+surface newer tags when you run it explicitly.
 
 ### Scope
 

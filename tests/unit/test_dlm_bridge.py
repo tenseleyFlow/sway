@@ -173,6 +173,102 @@ def test_resolve_dlm_maps_sections(fake_dlm: Path) -> None:
     assert pref.preferences[0].chosen == "good answer"
 
 
+def test_resolve_raises_dlm_compat_error_on_missing_hf_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F06 — dlm.base_models.resolve returning an object without
+    ``hf_id`` must raise DlmCompatError (not silently fall back to the
+    registry key, which would push the failure into the backend load
+    with a less helpful message)."""
+    dlm_pkg = types.ModuleType("dlm")
+    dlm_doc = types.ModuleType("dlm.doc")
+    dlm_doc_parser = types.ModuleType("dlm.doc.parser")
+
+    @dataclass
+    class _Frontmatter:
+        dlm_id: str = "01TEST"
+        base_model: str = "smollm2-135m"
+
+    @dataclass
+    class _Parsed:
+        frontmatter: _Frontmatter
+        sections: tuple[object, ...]
+
+    dlm_doc_parser.parse_file = lambda _p: _Parsed(  # type: ignore[attr-defined]
+        _Frontmatter(), sections=()
+    )
+
+    # Stand-in for a post-rename dlm where ``hf_id`` became ``repo_id``.
+    @dataclass
+    class _RenamedSpec:
+        repo_id: str = "HuggingFaceTB/SmolLM2-135M-Instruct"
+
+    dlm_base = types.ModuleType("dlm.base_models")
+    dlm_base.resolve = lambda _k: _RenamedSpec()  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "dlm", dlm_pkg)
+    monkeypatch.setitem(sys.modules, "dlm.doc", dlm_doc)
+    monkeypatch.setitem(sys.modules, "dlm.doc.parser", dlm_doc_parser)
+    monkeypatch.setitem(sys.modules, "dlm.base_models", dlm_base)
+
+    dlm_file = tmp_path / "doc.dlm"
+    dlm_file.write_text("---\ndlm_id: 01TEST\n---\n\nbody\n", encoding="utf-8")
+
+    from dlm_sway.core.errors import DlmCompatError
+    from dlm_sway.integrations.dlm.resolver import resolve_dlm
+
+    with pytest.raises(DlmCompatError, match="hf_id"):
+        resolve_dlm(dlm_file)
+
+
+def test_resolve_raises_dlm_compat_error_on_resolve_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """F06 — when dlm.base_models.resolve itself raises, wrap the
+    underlying exception in DlmCompatError (preserves __cause__ for
+    debugging; surfaces as a typed sway error for callers)."""
+    dlm_pkg = types.ModuleType("dlm")
+    dlm_doc = types.ModuleType("dlm.doc")
+    dlm_doc_parser = types.ModuleType("dlm.doc.parser")
+
+    @dataclass
+    class _Frontmatter:
+        dlm_id: str = "01TEST"
+        base_model: str = "smollm2-135m"
+
+    @dataclass
+    class _Parsed:
+        frontmatter: _Frontmatter
+        sections: tuple[object, ...]
+
+    dlm_doc_parser.parse_file = lambda _p: _Parsed(  # type: ignore[attr-defined]
+        _Frontmatter(), sections=()
+    )
+
+    class _RegistryDriftError(RuntimeError):
+        pass
+
+    def _raise(_k: str) -> object:
+        raise _RegistryDriftError("unknown base key after rename")
+
+    dlm_base = types.ModuleType("dlm.base_models")
+    dlm_base.resolve = _raise  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "dlm", dlm_pkg)
+    monkeypatch.setitem(sys.modules, "dlm.doc", dlm_doc)
+    monkeypatch.setitem(sys.modules, "dlm.doc.parser", dlm_doc_parser)
+    monkeypatch.setitem(sys.modules, "dlm.base_models", dlm_base)
+
+    dlm_file = tmp_path / "doc.dlm"
+    dlm_file.write_text("---\ndlm_id: 01TEST\n---\n\nbody\n", encoding="utf-8")
+
+    from dlm_sway.core.errors import DlmCompatError
+    from dlm_sway.integrations.dlm.resolver import resolve_dlm
+
+    with pytest.raises(DlmCompatError, match="_RegistryDriftError"):
+        resolve_dlm(dlm_file)
+
+
 def test_resolve_without_dlm_installed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """resolve_dlm surfaces a SwayError when the dlm package is missing."""
     # Wipe any cached dlm modules so the lazy import fails.

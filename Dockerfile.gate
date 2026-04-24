@@ -1,0 +1,56 @@
+# sway-gate — pre-built image for the sway-gate-docker pre-commit hook.
+#
+# Contains:
+#   - Python 3.11 + dlm-sway[hf,semsim] from PyPI (torch wheels baked in)
+#   - Pre-cached MiniLM weights at /opt/sentence-transformers/ so
+#     adapter_revert / cluster_kl don't cold-download on first gate run.
+#
+# The hook runs ``sway gate <spec>`` against a mounted working-tree.
+# Image is built + pushed by .github/workflows/docker.yml on ``v*`` tags.
+
+FROM python:3.11-slim AS base
+
+# HF / transformers cache env — we pre-warm the MiniLM during build;
+# point runtime at the same location so cache hits work.
+ENV HF_HOME=/opt/hf-cache \
+    SENTENCE_TRANSFORMERS_HOME=/opt/sentence-transformers \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Minimal system deps — git for pip VCS installs (unused on prod wheels
+# but keeps dev-image debugging practical); curl for healthchecks.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# SWAY_VERSION is baked in at build time so the image layer reflects
+# the exact wheel installed. docker.yml passes this from the git tag.
+ARG SWAY_VERSION=0.1.0
+
+# Install sway with hf (torch + transformers + peft + safetensors) and
+# semsim (sentence-transformers + scikit-learn) extras. The semsim
+# extra is ~80 MB MiniLM + sklearn; pre-installing here vs lazy-
+# installing at gate time is the whole point of the docker image.
+RUN pip install "dlm-sway[hf,semsim]==${SWAY_VERSION}"
+
+# Pre-fetch the MiniLM weights used by adapter_revert (A2) and
+# cluster_kl (S16). Without this, the first gate on an adapter touching
+# either probe pays ~80 MB of download latency. Cache path mirrors the
+# SENTENCE_TRANSFORMERS_HOME env set above.
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
+# A working directory pre-commit will bind-mount over at runtime.
+WORKDIR /workspace
+
+# Sanity: sway --version should match SWAY_VERSION. Build fails
+# loudly otherwise.
+RUN sway --version
+
+# ENTRYPOINT keeps the image composable: ``docker run sway-gate <args>``
+# runs ``sway <args>``. The pre-commit hook's entry: line passes
+# ``sway gate`` explicitly — ENTRYPOINT defers that choice to the caller.
+ENTRYPOINT ["sway"]
+CMD ["--help"]

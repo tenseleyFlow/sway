@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+## 0.1.0 — 2026-04-24
+
+First PyPI release. Alpha — API not guaranteed stable until v1.0.
+Rolls up every sprint through Sprint 22; earlier sprints accumulated
+under the rolling Unreleased header pre-release.
+
+### Sprint 22 — v0.1.0 release + F06 dlm-compat test + Docker image
+
+First PyPI publish. Version bumped from `0.1.0.dev0` to `0.1.0`.
+Pre-commit consumer `rev:` pins switch from commit SHA to `v0.1.0`.
+Closes Audit 03 F05 (SHA-pin resolves at tag) and F06 (dlm API
+compatibility regression test).
+
+**D-path1 — PyPI publish.**
+
+- **`pyproject.toml`** — version `0.1.0`. `Development Status :: 3 -
+  Alpha` classifier already present.
+- **`src/dlm_sway/__init__.py`** — `__version__ = "0.1.0"`.
+- **`README.md`** — real `pip install "dlm-sway[hf]"` recipe replaces
+  the "Planned PyPI install (not live yet)" placeholder. Pre-alpha
+  banner swapped for an explicit Alpha + semver-from-v1.0 disclaimer.
+
+**F06 — dlm API compatibility regression test.**
+
+- **`core/errors.DlmCompatError`** — new typed exception. Raised
+  when dlm's public surface drifts out of the contract sway's
+  resolver depends on (currently: `dlm.base_models.resolve(key).hf_id`).
+  Message includes installed-dlm version + a pip-install hint.
+- **`integrations/dlm/resolver`** — the `except Exception: return
+  base_model` silent fallback is gone. `resolve()` raising or
+  returning an object without `hf_id` now raises `DlmCompatError`
+  (chained via `__cause__` for tracebacks). An extra
+  `_installed_dlm_version()` helper introspects
+  `importlib.metadata` for the error message.
+- **`tests/unit/test_dlm_bridge`** — 2 new regression tests pin the
+  two drift branches (missing `hf_id`; `resolve` itself raising).
+- **`tests/integration/test_dlm_api_compat`** — new slow+online+dlm
+  integration test iterates dlm's registry keys and asserts every
+  entry resolves to a spec with a plausible `hf_id`. Gracefully
+  skipped (via `pytest.importorskip`) when the `[dlm]` extra isn't
+  installed, so CI without dlm published to PyPI still passes.
+- **`pyproject.toml`** — `[dlm]` extra pinned to `dlm>=0.9,<1.0`.
+  Upper bound tightens to the range the compat test has validated;
+  bump when dlm cuts v1.0 and the contract is re-verified.
+
+**D-path2 — Docker image (`sway-gate`).**
+
+- **`Dockerfile.gate`** — `python:3.11-slim` + `dlm-sway[hf,semsim]`
+  at the build-time `SWAY_VERSION` ARG. Pre-fetches the MiniLM
+  weights (`sentence-transformers/all-MiniLM-L6-v2`, ~80 MB) so
+  `adapter_revert` / `cluster_kl` probes don't cold-download on
+  first gate run. `ENTRYPOINT ["sway"]` — pre-commit hook passes
+  `gate` as the first container arg.
+- **`.github/workflows/docker.yml`** — on `v*` tag push + manual
+  dispatch. Builds on GHA, pushes to `ghcr.io/
+  tenseleyflow/sway-gate:{vX.Y.Z, latest}`. Smoke-tests the pushed
+  image with `--version`.
+- **`.pre-commit-hooks.yaml`** — new `sway-gate-docker` variant
+  using `language: docker_image` pointing at
+  `ghcr.io/tenseleyflow/sway-gate:v0.1.0 gate`. Third option
+  alongside `sway-gate` (system PATH) and `sway-gate-isolated`
+  (fresh venv).
+
+**F05 closure.**
+
+- **`.pre-commit-hooks.yaml`** — isolated variant's
+  `additional_dependencies` migrates from
+  `dlm-sway[hf] @ git+https://…@<SHA>` to
+  `dlm-sway[hf]==0.1.0`. Consumer `rev:` in
+  `.pre-commit-config.yaml` pins to `v0.1.0`. SHA churn over.
+
+**README.**
+
+- Real `pip install` recipes for every extra (`[hf]`, `[dlm]`,
+  `[all]`, …). "Install from source" kept for contributor workflow.
+- Pre-commit section: three hooks (system / isolated / docker)
+  with first-run-cost comparison table.
+
 ### Sprint 21 — Audit 03 closure
 
 Closes the Audit 03 short list — 2 🟠 major + 5 🟡 minor findings the
