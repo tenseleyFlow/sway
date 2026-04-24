@@ -37,7 +37,7 @@ import json
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
@@ -65,6 +65,16 @@ class BackendStats:
     #: Total wall seconds spent *inside* backend scoring methods
     #: (forward-pass compute + cache hits; excludes probe-side work).
     scoring_wall_s: float = 0.0
+    #: S23 batched-backend-exec counters. ``batches_sent`` is the number
+    #: of batched forward calls the backend actually issued (i.e. misses
+    #: routed through the batched path; single-prompt calls and cache
+    #: hits don't increment). ``batched_prompts`` is the sum of batch
+    #: sizes, so ``batched_prompts / batches_sent`` = mean batch size.
+    #: A run with zero batches (older probes / opt-out probes only)
+    #: reports the avg as 0 via :attr:`avg_batch_size`.
+    batches_sent: int = 0
+    batched_prompts: int = 0
+    max_batch_size: int = 0
 
     @property
     def total_lookups(self) -> int:
@@ -75,6 +85,10 @@ class BackendStats:
         total = self.total_lookups
         return (self.cache_hits / total) if total > 0 else 0.0
 
+    @property
+    def avg_batch_size(self) -> float:
+        return (self.batched_prompts / self.batches_sent) if self.batches_sent > 0 else 0.0
+
     def to_dict(self) -> dict[str, float | int]:
         return {
             "cache_hits": self.cache_hits,
@@ -82,6 +96,10 @@ class BackendStats:
             "forward_passes": self.forward_passes,
             "scoring_wall_s": self.scoring_wall_s,
             "hit_rate": self.hit_rate,
+            "batches_sent": self.batches_sent,
+            "batched_prompts": self.batched_prompts,
+            "max_batch_size": self.max_batch_size,
+            "avg_batch_size": self.avg_batch_size,
         }
 
 
@@ -278,6 +296,105 @@ class BackendInstrumentation:
             )
         )
         return value
+
+    def cached_batch(
+        self,
+        op: CacheOp,
+        view_id: str,
+        prompts: Sequence[str],
+        top_k: int,
+        compute_misses: Callable[[list[int]], list[Any]],
+    ) -> list[Any]:
+        """Route a batched scoring call through the cache + tracer.
+
+        Per-prompt cache lookup happens first; entries already in the
+        cache are served from it without ever entering the batch. The
+        ``compute_misses`` callback receives the list of indices into
+        ``prompts`` that missed, and is expected to return a list of
+        results *in the same order* — the backend is free to pad, call
+        ``model.forward`` once, and split the logits per row.
+
+        Counters incremented:
+          - ``cache_hits`` per cached prompt
+          - ``cache_misses`` + ``forward_passes`` per missed prompt
+          - ``batches_sent`` once per actual forward (only when
+            ``compute_misses`` is called, i.e. at least one miss)
+          - ``batched_prompts`` by the miss count
+          - ``max_batch_size`` updated to ``max(prev, miss_count)``
+
+        Trace events are emitted per prompt so the JSONL trace keeps
+        its per-prompt granularity regardless of how many rows the
+        backend packed into one GPU call.
+        """
+        results: list[Any] = [None] * len(prompts)
+        miss_indices: list[int] = []
+        prompt_hashes: list[str] = [_prompt_hash(p) for p in prompts]
+
+        # Pass 1: cache lookups.
+        for i, prompt_hash in enumerate(prompt_hashes):
+            key = (op, view_id, prompt_hash, top_k)
+            hit_start = time.perf_counter()
+            cached_value = self.cache.get(key)
+            if cached_value is not _MISS:
+                self.stats.cache_hits += 1
+                wall = time.perf_counter() - hit_start
+                self.stats.scoring_wall_s += wall
+                self.trace.write(
+                    _TraceEvent(
+                        ts=time.time(),
+                        probe=self._current_probe,
+                        view_id=view_id,
+                        prompt_hash=prompt_hash,
+                        top_k=top_k,
+                        op=op,
+                        wall_ms=wall * 1000.0,
+                        hit=True,
+                    )
+                )
+                results[i] = cached_value
+            else:
+                miss_indices.append(i)
+
+        # Pass 2: one forward call for the miss subset.
+        if miss_indices:
+            compute_start = time.perf_counter()
+            miss_values = compute_misses(miss_indices)
+            if len(miss_values) != len(miss_indices):
+                raise RuntimeError(
+                    f"batched compute returned {len(miss_values)} values for "
+                    f"{len(miss_indices)} misses — backend bug"
+                )
+            wall = time.perf_counter() - compute_start
+            # Divide wall time evenly across misses for
+            # scoring_wall_s bookkeeping; batched callers don't have a
+            # per-prompt attribution.
+            per_miss_wall = wall / len(miss_indices)
+            self.stats.scoring_wall_s += wall
+            self.stats.batches_sent += 1
+            self.stats.batched_prompts += len(miss_indices)
+            if len(miss_indices) > self.stats.max_batch_size:
+                self.stats.max_batch_size = len(miss_indices)
+            for miss_pos, idx in enumerate(miss_indices):
+                value = miss_values[miss_pos]
+                key = (op, view_id, prompt_hashes[idx], top_k)
+                self.cache.put(key, value)
+                self.stats.cache_misses += 1
+                self.stats.forward_passes += 1
+                self.trace.write(
+                    _TraceEvent(
+                        ts=time.time(),
+                        probe=self._current_probe,
+                        view_id=view_id,
+                        prompt_hash=prompt_hashes[idx],
+                        top_k=top_k,
+                        op=op,
+                        wall_ms=per_miss_wall * 1000.0,
+                        hit=False,
+                    )
+                )
+                results[idx] = value
+
+        return results
 
 
 def _prompt_hash(prompt: str) -> str:
