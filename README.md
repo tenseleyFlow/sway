@@ -213,37 +213,37 @@ pip install 'dlm-sway[hf,pytest]'
 ## Pre-commit
 
 For teams using [pre-commit.com](https://pre-commit.com), sway ships
-a `.pre-commit-hooks.yaml` declaring two hooks that run `sway gate`
+a `.pre-commit-hooks.yaml` declaring three hooks that run `sway gate`
 before every commit touching a spec, `.dlm` document, or adapter
 file. Add 4–5 lines to your `.pre-commit-config.yaml`:
 
 ```yaml
 repos:
   - repo: https://github.com/tenseleyFlow/sway
-    rev: 2ecd9a0c9d65a9b9576a185597c88f41444f9646  # pin to a SHA
+    rev: v0.1.0
     hooks:
       - id: sway-gate
         args: ["sway.yaml", "--threshold=0.6"]
 ```
 
-Two variants ship; pick whichever fits your install posture:
+Three variants ship; pick whichever fits your install posture:
 
 | Hook | When to use | First-run cost |
 |---|---|---|
 | `sway-gate` | you already ran `pip install 'dlm-sway[hf]'` | ~none — uses the sway binary on your `PATH` |
 | `sway-gate-isolated` | fresh venv, no existing sway install | ~2 min + ~5 GB — pre-commit builds a fresh venv and installs sway + torch + transformers |
+| `sway-gate-docker` | zero-install hosts with docker available | ~1 min — pulls `ghcr.io/tenseleyflow/sway-gate:v0.1.0` (torch baked in, MiniLM weights pre-cached) |
 
 The recommended default is `sway-gate`. Switch to
 `sway-gate-isolated` if you can't rely on a host-level sway install.
+Reach for `sway-gate-docker` on ephemeral CI runners where docker is
+cheaper than a fresh venv.
 
 ### Rev pinning
 
-The example above pins to a commit SHA. Sway is pre-v0.1.0 — no
-tagged release yet. Pinning to `HEAD` would silently drift your
-gate's behavior under every `pre-commit autoupdate`; a SHA is the
-honest pre-release pattern. Bump it deliberately when you want to
-pick up upstream changes. After sway publishes v0.1.0 the recipe
-switches to `rev: v0.1.0` and the SHA churn stops.
+The example above pins to the `v0.1.0` tag. Bump it deliberately
+when you want to pick up a new release; `pre-commit autoupdate` will
+surface newer tags when you run it explicitly.
 
 ### Scope
 
