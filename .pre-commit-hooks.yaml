@@ -1,8 +1,8 @@
 # sway pre-commit hooks (S19).
 #
-# Two variants — pick the one that matches your install posture. Both
-# run ``sway gate`` under the hood and differ only in how sway itself
-# is resolved on the runner.
+# Three variants — pick the one that matches your install posture.
+# All three run ``sway gate`` under the hood and differ only in how
+# sway itself is resolved on the runner.
 #
 # Variant 1: ``sway-gate`` (RECOMMENDED) — ``language: system``.
 #   Uses the sway binary already on your ``PATH``. Fast, no extra
@@ -16,7 +16,14 @@
 #   takes ~2 minutes; subsequent runs reuse the cached venv. Right
 #   choice for users without a pre-existing sway install.
 #
-# Both variants set ``pass_filenames: false`` — ``sway gate`` takes
+# Variant 3: ``sway-gate-docker`` — ``language: docker_image``.
+#   Pulls the pre-built ``ghcr.io/tenseleyflow/sway-gate`` image
+#   (torch wheels baked in, MiniLM weights pre-cached). First run is
+#   ~1 minute to pull + warm; subsequent runs reuse the local image.
+#   Right choice for zero-install CI / ephemeral runners with docker
+#   available. Requires docker on the host.
+#
+# All variants set ``pass_filenames: false`` — ``sway gate`` takes
 # exactly one spec path via ``args:``, not a list of matched files.
 # The ``files:`` regex only decides WHEN the hook fires; the ``args:``
 # in your ``.pre-commit-config.yaml`` decides WHAT spec it gates.
@@ -47,9 +54,26 @@
     use this variant when you can't rely on a host-level sway install.
   entry: sway gate
   language: python
-  # Pinned to a specific commit — sway hasn't tagged a release yet.
-  # When v0.1.0 ships, we'll switch to tag-based pinning.
+  # v0.1.0 on PyPI — consumer ``rev:`` in .pre-commit-config.yaml
+  # tracks the sway release tag ("v0.1.0", "v0.2.0", ...). Closes
+  # audit-03 F05.
   additional_dependencies:
-    - "dlm-sway[hf] @ git+https://github.com/tenseleyFlow/sway.git@2ecd9a0c9d65a9b9576a185597c88f41444f9646"
+    - "dlm-sway[hf]==0.1.0"
+  files: '(?:(^|/)sway\.ya?ml|\.dlm$|(^|/)adapter.*(adapter_config\.json|adapter_model\.safetensors)$)'
+  pass_filenames: false
+
+- id: sway-gate-docker
+  name: sway gate (docker image) — differential testing for fine-tuned LMs
+  description: |
+    Same as sway-gate, but pre-commit pulls the pre-built sway-gate
+    Docker image and runs sway inside it. Torch wheels are baked in;
+    MiniLM weights are pre-cached. Fastest first-run path when you
+    already have docker on the host.
+  # For ``language: docker_image`` pre-commit treats the first token
+  # of ``entry:`` as the image to pull and the rest as the command to
+  # run inside it. Tag tracks the sway release; the image is built by
+  # .github/workflows/docker.yml on ``v*`` tag push.
+  entry: ghcr.io/tenseleyflow/sway-gate:v0.1.0 sway gate
+  language: docker_image
   files: '(?:(^|/)sway\.ya?ml|\.dlm$|(^|/)adapter.*(adapter_config\.json|adapter_model\.safetensors)$)'
   pass_filenames: false
