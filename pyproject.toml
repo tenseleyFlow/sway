@@ -1,6 +1,6 @@
 [project]
 name = "dlm-sway"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Differential testing for fine-tuned causal LMs: did LoRA/QLoRA training actually change behavior, or is the model defaulting to the pretrained base?"
 readme = "README.md"
 requires-python = ">=3.11"
