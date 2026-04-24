@@ -644,7 +644,13 @@ def _category_order(score: SwayScore) -> list[str]:
 
 
 def _cache_line(suite: SuiteResult) -> str | None:
-    """Format the cache-hit-rate footer line, or ``None`` when no stats."""
+    """Format the cache-hit-rate footer line, or ``None`` when no stats.
+
+    S23 — suffixes a ``batches: N (avg=K)`` segment when the suite
+    fired any batched forward calls. Runs that only use single-prompt
+    scoring (older probes, opt-out probes) render the cache line
+    alone, preserving pre-S23 footer shape.
+    """
     stats = suite.backend_stats
     if not stats:
         return None
@@ -654,7 +660,12 @@ def _cache_line(suite: SuiteResult) -> str | None:
     if total == 0:
         return None
     pct = 100.0 * hits / total
-    return f"cache: {hits}/{total} = {pct:.0f}%"
+    line = f"cache: {hits}/{total} = {pct:.0f}%"
+    batches = int(stats.get("batches_sent", 0))
+    if batches > 0:
+        avg = float(stats.get("avg_batch_size", 0.0))
+        line = f"{line} | batches: {batches} (avg={avg:.1f})"
+    return line
 
 
 def _adapter_label(adapter_id: str) -> str:
