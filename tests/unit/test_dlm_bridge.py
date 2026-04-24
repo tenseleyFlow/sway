@@ -245,11 +245,11 @@ def test_resolve_raises_dlm_compat_error_on_resolve_exception(
         _Frontmatter(), sections=()
     )
 
-    class _RegistryDrift(RuntimeError):
+    class _RegistryDriftError(RuntimeError):
         pass
 
     def _raise(_k: str) -> object:
-        raise _RegistryDrift("unknown base key after rename")
+        raise _RegistryDriftError("unknown base key after rename")
 
     dlm_base = types.ModuleType("dlm.base_models")
     dlm_base.resolve = _raise  # type: ignore[attr-defined]
@@ -265,7 +265,7 @@ def test_resolve_raises_dlm_compat_error_on_resolve_exception(
     from dlm_sway.core.errors import DlmCompatError
     from dlm_sway.integrations.dlm.resolver import resolve_dlm
 
-    with pytest.raises(DlmCompatError, match="_RegistryDrift"):
+    with pytest.raises(DlmCompatError, match="_RegistryDriftError"):
         resolve_dlm(dlm_file)
 
 

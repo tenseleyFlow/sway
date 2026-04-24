@@ -80,7 +80,10 @@ def test_base_resolves_with_hf_id(key: str) -> None:
         f"without .hf_id — public-surface drift. Visible attrs: "
         f"{sorted(a for a in dir(spec) if not a.startswith('_'))[:8]!r}"
     )
-    assert isinstance(spec.hf_id, str) and "/" in spec.hf_id, (
+    assert isinstance(spec.hf_id, str), (
+        f"dlm.base_models.resolve({key!r}).hf_id = {spec.hf_id!r} — expected a string."
+    )
+    assert "/" in spec.hf_id, (
         f"dlm.base_models.resolve({key!r}).hf_id = {spec.hf_id!r} — "
         "not a plausible HuggingFace 'org/name' id."
     )
