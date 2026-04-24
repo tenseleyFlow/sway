@@ -254,9 +254,7 @@ class _HFView:
         log_probs = F.log_softmax(logits.float(), dim=-1).squeeze(0)
         return _topk_to_token_dist(log_probs, top_k=top_k)
 
-    def next_token_dist_batch(
-        self, prompts: Sequence[str], *, top_k: int = 256
-    ) -> list[TokenDist]:
+    def next_token_dist_batch(self, prompts: Sequence[str], *, top_k: int = 256) -> list[TokenDist]:
         """Batched forward via tokenizer left-padding.
 
         Decoder-only LMs need left-padding because the last-token
@@ -294,7 +292,9 @@ class _HFView:
                     attention_mask=tokens.get("attention_mask"),
                 ).logits[:, -1, :]  # (B, V) — left-pad makes "last" always the real last token
             log_probs = F.log_softmax(logits.float(), dim=-1)  # (B, V)
-            return [_topk_to_token_dist(log_probs[row], top_k=top_k) for row in range(len(miss_prompts))]
+            return [
+                _topk_to_token_dist(log_probs[row], top_k=top_k) for row in range(len(miss_prompts))
+            ]
 
         return self._inst.cached_batch(
             "next_token_dist", self.id, list(prompts), top_k, compute_misses

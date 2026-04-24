@@ -197,7 +197,8 @@ class ClusterKLProbe(Probe):
         with ctx.backend.as_finetuned() as ft_view:
             ft_dists = ft_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
         divergences: list[float] = [
-            divergence(b, f, kind=spec.divergence) for b, f in zip(base_dists, ft_dists, strict=True)
+            divergence(b, f, kind=spec.divergence)
+            for b, f in zip(base_dists, ft_dists, strict=True)
         ]
 
         # Aggregate per-cluster means + variances. A cluster that

@@ -129,9 +129,7 @@ class ScoringBackend(Protocol):
         """
         ...
 
-    def next_token_dist_batch(
-        self, prompts: Sequence[str], *, top_k: int = 256
-    ) -> list[TokenDist]:
+    def next_token_dist_batch(self, prompts: Sequence[str], *, top_k: int = 256) -> list[TokenDist]:
         """Batched variant of :meth:`next_token_dist`.
 
         Returns one :class:`TokenDist` per entry in ``prompts``, in the
