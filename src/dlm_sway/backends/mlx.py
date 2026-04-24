@@ -14,7 +14,7 @@ PEFT-→-MLX converter; for now the contract is "bring your own .npz".
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +154,19 @@ class _MLXView:
             top_k,
             lambda: self._compute_next_token_dist(prompt, top_k=top_k),
         )
+
+    def next_token_dist_batch(self, prompts: Sequence[str], *, top_k: int = 256) -> list[TokenDist]:
+        """MLX batched variant — per-prompt loop for now.
+
+        MLX's per-prompt forward on Apple Silicon is already fast
+        enough that the kernel-launch amortization a real batched
+        forward (padded ``mx.array`` + attention mask) would buy is
+        small relative to the HF CUDA/MPS case. The S07 cache still
+        short-circuits repeat prompts. Future work can swap in an
+        ``mx.array`` padded forward and route through ``cached_batch``
+        for counter bookkeeping parity with HF.
+        """
+        return [self.next_token_dist(p, top_k=top_k) for p in prompts]
 
     def _compute_next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         logits = self._forward_logits(prompt)

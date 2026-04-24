@@ -88,6 +88,17 @@ class TestProtocols:
                     vocab_size=1,
                 )
 
+            def next_token_dist_batch(
+                self,
+                prompts,  # type: ignore[no-untyped-def]
+                *,
+                top_k: int = 256,
+            ) -> list[TokenDist]:
+                # S23 — Protocol requires the batched method at
+                # runtime. Defer to the single-prompt path; enough to
+                # satisfy the runtime_checkable isinstance check.
+                return [self.next_token_dist(p, top_k=top_k) for p in prompts]
+
         assert isinstance(FakeScoring(), ScoringBackend)
 
     def test_differential_backend_runtime_checkable(self) -> None:

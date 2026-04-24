@@ -156,6 +156,116 @@ class TestBackendStats:
         assert d["scoring_wall_s"] == pytest.approx(1.5)
         assert d["hit_rate"] == pytest.approx(0.3)
 
+    def test_avg_batch_size_zero_when_empty(self) -> None:
+        """S23 — no batches fired yet → avg is 0, not a div-by-zero."""
+        s = BackendStats()
+        assert s.avg_batch_size == 0.0
+        assert s.to_dict()["avg_batch_size"] == 0.0
+
+    def test_batch_counters_surface_in_to_dict(self) -> None:
+        """S23 — batch counters round-trip through to_dict()."""
+        s = BackendStats(batches_sent=2, batched_prompts=12, max_batch_size=8)
+        d = s.to_dict()
+        assert d["batches_sent"] == 2
+        assert d["batched_prompts"] == 12
+        assert d["max_batch_size"] == 8
+        assert d["avg_batch_size"] == pytest.approx(6.0)
+
+
+class TestBackendInstrumentationCachedBatch:
+    """S23 — cached_batch routing + counter bookkeeping."""
+
+    def test_all_misses_fire_one_batch(self) -> None:
+        inst = BackendInstrumentation()
+        calls: list[list[int]] = []
+
+        def compute(miss_indices: list[int]) -> list[str]:
+            calls.append(list(miss_indices))
+            return [f"v{i}" for i in miss_indices]
+
+        out = inst.cached_batch("next_token_dist", "base", ["p1", "p2", "p3"], 32, compute)
+        assert out == ["v0", "v1", "v2"]
+        # One forward call covering all 3.
+        assert calls == [[0, 1, 2]]
+        assert inst.stats.batches_sent == 1
+        assert inst.stats.batched_prompts == 3
+        assert inst.stats.max_batch_size == 3
+        assert inst.stats.avg_batch_size == pytest.approx(3.0)
+        assert inst.stats.cache_misses == 3
+        assert inst.stats.cache_hits == 0
+        assert inst.stats.forward_passes == 3
+
+    def test_partial_cache_hit_skips_cached_from_batch(self) -> None:
+        """Cache-per-prompt: hits skip the batch; only misses enter compute."""
+        inst = BackendInstrumentation()
+
+        # Warm one entry.
+        inst.cached("next_token_dist", "base", "p1", 32, lambda: "cached_v1")
+
+        misses: list[list[int]] = []
+
+        def compute(miss_indices: list[int]) -> list[str]:
+            misses.append(list(miss_indices))
+            # Only produces values for miss positions.
+            return [f"fresh_{i}" for i in miss_indices]
+
+        out = inst.cached_batch("next_token_dist", "base", ["p1", "p2", "p3"], 32, compute)
+        # p1 served from cache; p2, p3 computed.
+        assert out == ["cached_v1", "fresh_1", "fresh_2"]
+        assert misses == [[1, 2]]
+        assert inst.stats.batches_sent == 1
+        assert inst.stats.batched_prompts == 2  # only the miss count
+        # Warmup was a miss; cached_batch hit p1 once + missed p2/p3.
+        assert inst.stats.cache_hits == 1
+        assert inst.stats.cache_misses == 3  # warmup + 2 batch misses
+
+    def test_all_cached_skips_forward(self) -> None:
+        """No misses → compute is never called, batches_sent stays 0."""
+        inst = BackendInstrumentation()
+        for p in ("p1", "p2"):
+            inst.cached("next_token_dist", "base", p, 32, lambda p=p: f"v_{p}")
+        inst.stats.batches_sent = 0  # reset from warmups
+        inst.stats.batched_prompts = 0
+        inst.stats.max_batch_size = 0
+
+        def compute(_idx: list[int]) -> list[str]:
+            raise AssertionError("compute should not have been called")
+
+        out = inst.cached_batch("next_token_dist", "base", ["p1", "p2"], 32, compute)
+        assert out == ["v_p1", "v_p2"]
+        assert inst.stats.batches_sent == 0
+        assert inst.stats.batched_prompts == 0
+
+    def test_max_batch_size_tracks_largest(self) -> None:
+        inst = BackendInstrumentation()
+
+        def c1(idx: list[int]) -> list[int]:
+            return list(idx)
+
+        inst.cached_batch("next_token_dist", "base", ["a", "b", "c"], 32, c1)
+        inst.cached_batch("next_token_dist", "base", ["d", "e"], 32, c1)
+        assert inst.stats.max_batch_size == 3
+
+    def test_wrong_return_length_raises(self) -> None:
+        inst = BackendInstrumentation()
+
+        def bad(idx: list[int]) -> list[int]:
+            return [0]  # wrong length
+
+        with pytest.raises(RuntimeError, match="backend bug"):
+            inst.cached_batch("next_token_dist", "base", ["p1", "p2", "p3"], 32, bad)
+
+    def test_empty_prompts_returns_empty(self) -> None:
+        """Sanity: an empty prompt list doesn't fire a batch."""
+        inst = BackendInstrumentation()
+
+        def compute(_idx: list[int]) -> list[int]:
+            raise AssertionError("compute should not have been called")
+
+        out = inst.cached_batch("next_token_dist", "base", [], 32, compute)
+        assert out == []
+        assert inst.stats.batches_sent == 0
+
 
 class TestTraceWriter:
     def test_disabled_is_noop(self, tmp_path: Path) -> None:

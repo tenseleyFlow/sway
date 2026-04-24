@@ -138,6 +138,24 @@ class Probe(ABC):
     category: ClassVar[str] = "adherence"
     """One of: ``adherence``, ``attribution``, ``calibration``,
     ``ablation``, ``baseline``. Drives composite scoring."""
+    batch_score: ClassVar[bool] = False
+    """Does this probe score its prompts via the backend's batched
+    :meth:`~dlm_sway.core.scoring.ScoringBackend.next_token_dist_batch`
+    path (S23)?
+
+    When ``True`` the probe's ``run()`` uses a single batched call per
+    view (typically inside a ``with backend.as_base()`` block) instead
+    of looping one prompt at a time. Backends with real batching (HF)
+    amortize kernel-launch overhead; backends without (dummy, MLX for
+    now) see identical behavior via the Protocol's default loop.
+
+    Opt-in. Set to ``True`` only when every prompt flows through a
+    uniform ``next_token_dist`` call (delta_kl, cluster_kl). Probes
+    that parameterize per-prompt context (prompt_collapse) or
+    interleave backend toggles per prompt (adapter_ablation) keep
+    ``False`` — those need bespoke batching logic deferred to a
+    follow-up sprint.
+    """
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

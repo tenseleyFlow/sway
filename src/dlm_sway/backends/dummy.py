@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Literal
@@ -135,6 +135,15 @@ class _DummyView:
             top_k,
             lambda: self._compute_next_token_dist(prompt, top_k=top_k),
         )
+
+    def next_token_dist_batch(self, prompts: Sequence[str], *, top_k: int = 256) -> list[TokenDist]:
+        # Dummy backend has no real forward to batch against. Loop
+        # over ``self.next_token_dist`` so subclasses (``_NullView``,
+        # ``_InterpolatedView``) that override the per-prompt method
+        # get their per-prompt semantics preserved on the batched
+        # code path. Batching counters stay at zero on this backend —
+        # real amortization lives in the HF backend's override.
+        return [self.next_token_dist(p, top_k=top_k) for p in prompts]
 
     def _compute_next_token_dist(self, prompt: str, *, top_k: int = 256) -> TokenDist:
         del top_k
