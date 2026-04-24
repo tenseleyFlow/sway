@@ -63,3 +63,31 @@ class ProbeError(SwayError):
     def __init__(self, probe: str, message: str) -> None:
         super().__init__(f"probe {probe!r}: {message}")
         self.probe = probe
+
+
+class DlmCompatError(SwayError):
+    """The installed ``dlm`` package's public surface doesn't match what
+    sway's resolver expects.
+
+    Raised when e.g. ``dlm.base_models.resolve`` returns an object
+    without the ``hf_id`` attribute we depend on — historically dlm
+    used ``hf_id``; if it renames to ``repo_id`` we want a loud,
+    actionable error with both version strings in the message, not a
+    silent pass-through that hands the backend a registry key it can't
+    load.
+
+    The installed-dlm version is introspected best-effort; it's
+    informational, not a key for programmatic branching.
+    """
+
+    def __init__(self, message: str, *, installed_dlm_version: str | None = None) -> None:
+        full = message
+        if installed_dlm_version:
+            full = f"{message} (installed dlm version: {installed_dlm_version})"
+        full = (
+            f"{full}\n"
+            "Hint: pin a compatible dlm with: pip install 'dlm-sway[dlm]' "
+            "(resolves the tested dlm version range from pyproject.toml)."
+        )
+        super().__init__(full)
+        self.installed_dlm_version = installed_dlm_version
