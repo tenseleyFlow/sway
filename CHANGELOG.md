@@ -2,6 +2,104 @@
 
 ## Unreleased
 
+### Sprint 23 — H1 batched backend execution
+
+Opens the door to 3-5× wall-time reduction on HF-backend suites by
+amortizing `model.forward` kernel-launch + memory-transfer overhead
+across prompt batches. Real speedup lands on the HF backend; other
+backends gain a unified Protocol surface via loop fallback.
+
+**Protocol.**
+
+- **`core/scoring.ScoringBackend`** — new method
+  `next_token_dist_batch(prompts, *, top_k) -> list[TokenDist]`.
+  Default implementation on the Protocol loops over
+  `next_token_dist`; backends override when they can amortize.
+  Adding the method to a `runtime_checkable` Protocol is a
+  contract change — all shipped backend views + the stub used by
+  `test_scoring.py::test_scoring_backend_runtime_checkable`
+  gained an explicit method implementation.
+
+**HF backend — real batching.**
+
+- **`backends/hf._HFView.next_token_dist_batch`** — calls
+  `tokenizer(prompts, padding=True, padding_side="left")` and a
+  single `model.forward` over the padded batch. Left-padding is
+  mandatory for decoder-only LMs: the last-token position (what
+  `next_token_dist` reads) must line up with the real end of each
+  sequence, not pad tokens.
+- **`backends/hf._topk_to_token_dist`** — extracted helper shared
+  by the single-prompt and batched paths so tail-mass accounting
+  (B6) stays identical across both.
+- **`backends/_instrumentation.BackendInstrumentation.cached_batch`**
+  — routes batched calls through per-prompt cache lookup before the
+  forward fires, so cached + uncached prompts in one call still
+  short-circuit per-entry. Callback contract:
+  `compute_misses(miss_indices) -> list[result]` in miss order.
+  Wall-time attribution divides the batch's time evenly across
+  miss entries for `scoring_wall_s` bookkeeping.
+
+**Instrumentation.**
+
+- **`BackendStats`** — three new counters: `batches_sent`,
+  `batched_prompts`, `max_batch_size`. `avg_batch_size` property
+  computes `batched_prompts / batches_sent` (0 when no batches
+  fired). All surfaced in `to_dict()`.
+- **`suite/report._cache_line`** — the report footer's
+  `cache: N/M = P%` line now suffixes
+  `| batches: K (avg=X.X)` when any batched forward fired. Runs
+  without batching render the cache line alone — pre-S23 footer
+  shape preserved.
+
+**Probes — opt-in.**
+
+- **`probes/base.Probe.batch_score: ClassVar[bool] = False`** —
+  new flag. Probes set True when their scoring flows uniformly
+  through `next_token_dist` on a prompt list.
+- **`probes/delta_kl.DeltaKLProbe`** — `batch_score = True`;
+  `run()` now issues one batched call per view (inside single
+  `as_base` / `as_finetuned` contexts) instead of 2×N context
+  entries with per-prompt calls. Divergences computed via
+  `zip(base_dists, ft_dists, strict=True)`.
+- **`probes/cluster_kl.ClusterKLProbe`** — same treatment; same
+  math.
+- Other probes (section_internalization, leakage,
+  paraphrase_invariance, adapter_ablation, prompt_collapse,
+  multi-turn-style probes) keep `batch_score=False` — each needs
+  bespoke batching logic deferred to a follow-up sprint.
+
+**Dummy / MLX / API backends.**
+
+- **`backends/dummy._DummyView.next_token_dist_batch`** — loops
+  over `self.next_token_dist` (not `_compute_next_token_dist`) so
+  subclass overrides (`_NullView`'s seeded-noise perturbation,
+  `_InterpolatedView`'s lam-blend) fire correctly on the batched
+  path. The dummy has no real forward to amortize; batching
+  counters stay at zero on this backend by design.
+- **`backends/mlx._MLXView.next_token_dist_batch`** — per-prompt
+  loop stub with a `TODO: mx.array padded forward` docstring.
+  MLX's per-prompt forward on Apple Silicon is already fast
+  enough that the kernel-launch amortization a real batched
+  forward would buy is small relative to the HF CUDA/MPS case.
+- **`backends/api.ApiScoringBackend.next_token_dist_batch`** —
+  per-prompt loop; OpenAI-compat HTTP servers score one
+  completion per request and httpx connection pooling already
+  amortizes network cost.
+
+**Tests.**
+
+- **`tests/unit/test_backend_instrumentation`** — new
+  `TestBackendInstrumentationCachedBatch` class (6 tests) pinning
+  all-miss / partial-cache-hit / all-cached / wrong-length-return
+  / max_batch_size / empty-prompts branches. `TestBackendStats`
+  gained 2 tests for the new counters + `avg_batch_size` property.
+- **`tests/unit/test_batched_backend_s23`** — new file with 5
+  tests: `batch_score` flag set on `DeltaKLProbe`, probe-level
+  spy that confirms the batched method is called exactly once
+  per view, byte-identical results vs serial, report footer
+  batches-segment conditional rendering, empty-prompts
+  short-circuit.
+
 ## 0.1.0 — 2026-04-24
 
 First PyPI release. Alpha — API not guaranteed stable until v1.0.
