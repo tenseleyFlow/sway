@@ -70,10 +70,12 @@
     MiniLM weights are pre-cached. Fastest first-run path when you
     already have docker on the host.
   # For ``language: docker_image`` pre-commit treats the first token
-  # of ``entry:`` as the image to pull and the rest as the command to
-  # run inside it. Tag tracks the sway release; the image is built by
+  # of ``entry:`` as the image to pull and the rest as argv inside the
+  # container. The image's ENTRYPOINT is ``["sway"]``, so passing
+  # ``gate`` here lands the caller at ``sway gate <args>``.
+  # Tag tracks the sway release; the image is built by
   # .github/workflows/docker.yml on ``v*`` tag push.
-  entry: ghcr.io/tenseleyflow/sway-gate:v0.1.0 sway gate
+  entry: ghcr.io/tenseleyflow/sway-gate:v0.1.0 gate
   language: docker_image
   files: '(?:(^|/)sway\.ya?ml|\.dlm$|(^|/)adapter.*(adapter_config\.json|adapter_model\.safetensors)$)'
   pass_filenames: false
