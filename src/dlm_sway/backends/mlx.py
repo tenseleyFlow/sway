@@ -155,22 +155,16 @@ class _MLXView:
             lambda: self._compute_next_token_dist(prompt, top_k=top_k),
         )
 
-    def next_token_dist_batch(
-        self, prompts: Sequence[str], *, top_k: int = 256
-    ) -> list[TokenDist]:
-        """MLX batched variant.
+    def next_token_dist_batch(self, prompts: Sequence[str], *, top_k: int = 256) -> list[TokenDist]:
+        """MLX batched variant — per-prompt loop for now.
 
         MLX's per-prompt forward on Apple Silicon is already fast
         enough that the kernel-launch amortization a real batched
         forward (padded ``mx.array`` + attention mask) would buy is
-        small relative to the HF CUDA/MPS case. To keep the sprint
-        focused, we inherit the Protocol's per-prompt loop here. The
-        per-prompt path already reuses the S07 cache, so batched
-        callers still pay zero extra cost on repeated prompts.
-
-        Protocol default already does exactly this; the override is
-        here for explicit documentation rather than behavior change —
-        future work can swap in an ``mx.array`` padded forward.
+        small relative to the HF CUDA/MPS case. The S07 cache still
+        short-circuits repeat prompts. Future work can swap in an
+        ``mx.array`` padded forward and route through ``cached_batch``
+        for counter bookkeeping parity with HF.
         """
         return [self.next_token_dist(p, top_k=top_k) for p in prompts]
 
