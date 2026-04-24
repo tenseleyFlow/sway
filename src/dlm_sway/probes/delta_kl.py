@@ -60,6 +60,11 @@ class DeltaKLProbe(Probe):
     kind = "delta_kl"
     spec_cls = DeltaKLSpec
     category = "adherence"
+    #: S23 — uniform next_token_dist workload across ``spec.prompts``
+    #: is a natural batch. The single-prompt loop below is replaced
+    #: with one batched call per view so the HF backend can amortize
+    #: kernel-launch overhead.
+    batch_score = True
 
     @classmethod
     def calibrate_spec(cls, ctx: RunContext) -> DeltaKLSpec | None:
@@ -84,13 +89,17 @@ class DeltaKLProbe(Probe):
             )
 
         top_k = spec.top_k if spec.top_k is not None else ctx.top_k
-        divergences: list[float] = []
-        for prompt in spec.prompts:
-            with ctx.backend.as_base() as base_view:
-                base_dist = base_view.next_token_dist(prompt, top_k=top_k)
-            with ctx.backend.as_finetuned() as ft_view:
-                ft_dist = ft_view.next_token_dist(prompt, top_k=top_k)
-            divergences.append(divergence(base_dist, ft_dist, kind=spec.divergence))
+        # S23: one batched forward per view instead of 2×N context-
+        # manager entries. next_token_dist_batch falls back to a
+        # per-prompt loop on backends without real batching so the
+        # result list stays identical to the pre-S23 path.
+        with ctx.backend.as_base() as base_view:
+            base_dists = base_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
+        with ctx.backend.as_finetuned() as ft_view:
+            ft_dists = ft_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
+        divergences: list[float] = [
+            divergence(b, f, kind=spec.divergence) for b, f in zip(base_dists, ft_dists, strict=True)
+        ]
 
         raw_mean = statistics.fmean(divergences)
         raw_max = max(divergences)

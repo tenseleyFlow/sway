@@ -56,9 +56,11 @@ from dlm_sway.core.model import LoadedModel
 from dlm_sway.core.scoring import RollingLogprob, ScoringModel, TokenDist
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
     import httpx
+else:
+    from collections.abc import Sequence
 
 
 #: Default vocab size reported when the caller doesn't supply one.
@@ -309,6 +311,16 @@ class ApiScoringBackend:
             top_k,
             lambda: self._next_token_dist_uncached(prompt, top_k=top_k),
         )
+
+    def next_token_dist_batch(
+        self, prompts: Sequence[str], *, top_k: int = 256
+    ) -> list[TokenDist]:
+        # OpenAI-compat HTTP servers score one completion per request.
+        # httpx connection pooling already amortizes network cost across
+        # sequential calls; a true batched endpoint would need a
+        # provider-specific extension. Loop via the cache so repeated
+        # prompts still short-circuit.
+        return [self.next_token_dist(p, top_k=top_k) for p in prompts]
 
     def _next_token_dist_uncached(self, prompt: str, *, top_k: int) -> TokenDist:
         payload = {
