@@ -100,6 +100,10 @@ class ClusterKLProbe(Probe):
     kind = "cluster_kl"
     spec_cls = ClusterKLSpec
     category = "adherence"
+    #: S23 — same shape as delta_kl (uniform next_token_dist over a
+    #: prompt list). Batched path drops HF wall time on the 8-prompt
+    #: calibration pass from 8× single-forward to 1× 8-sample forward.
+    batch_score = True
 
     @classmethod
     def calibrate_spec(cls, ctx: RunContext) -> ClusterKLSpec | None:
@@ -185,15 +189,16 @@ class ClusterKLProbe(Probe):
                 ),
             )
 
-        # Per-prompt divergences (same math as ``delta_kl``).
+        # S23 — per-prompt divergences, now via one batched forward
+        # per view (same math as ``delta_kl``).
         top_k = spec.top_k if spec.top_k is not None else ctx.top_k
-        divergences: list[float] = []
-        for prompt in spec.prompts:
-            with ctx.backend.as_base() as base_view:
-                base_dist = base_view.next_token_dist(prompt, top_k=top_k)
-            with ctx.backend.as_finetuned() as ft_view:
-                ft_dist = ft_view.next_token_dist(prompt, top_k=top_k)
-            divergences.append(divergence(base_dist, ft_dist, kind=spec.divergence))
+        with ctx.backend.as_base() as base_view:
+            base_dists = base_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
+        with ctx.backend.as_finetuned() as ft_view:
+            ft_dists = ft_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
+        divergences: list[float] = [
+            divergence(b, f, kind=spec.divergence) for b, f in zip(base_dists, ft_dists, strict=True)
+        ]
 
         # Aggregate per-cluster means + variances. A cluster that
         # ended up empty (can happen with k-means when an initial
