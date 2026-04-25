@@ -19,6 +19,7 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     cluster_kl,
     delta_kl,
     external_perplexity,
+    gradient_ghost,
     leakage,
     null_adapter,
     paraphrase_invariance,
