@@ -46,9 +46,14 @@ populated by the dlm autogen bridge from
 
 - ``min_steps_threshold = 50`` — below this is severely undertrained.
 - ``undertrained_layer_ratio = 2.0`` — a layer's mean ``exp_avg_sq``
-  must be > 2× the global mean to count as "still has high gradient
-  variance." Multiplicative threshold (relative, not absolute) so
-  the probe is architecture-agnostic.
+  must be > 2× the **minimum** layer's mean to count as "still has
+  high gradient variance." We compare against the min (not the
+  global mean) because mean rises with outliers — under a global-
+  mean baseline the per-layer ratio asymptotically caps at
+  ``N/(N-K)`` and can never exceed ``ratio`` for K layers without K
+  also rising. Min-baseline gives a stable "K layers are anomalously
+  high vs the calmest layer" signal regardless of how many layers
+  spike.
 - ``layer_failure_frac = 0.3`` — WARN if more than 30% of layers
   cross the per-layer threshold.
 """
@@ -82,8 +87,9 @@ class GradientGhostSpec(ProbeSpec):
     """``global_step`` below this → FAIL (severely undertrained)."""
     undertrained_layer_ratio: float = Field(default=2.0, gt=1.0)
     """A layer counts as 'high gradient variance' when its mean
-    ``exp_avg_sq`` exceeds ``ratio * global_mean``. Strictly > 1
-    (a value of 1 would always flag half the layers)."""
+    ``exp_avg_sq`` exceeds ``ratio * min_layer_mean``. The min-
+    baseline (rather than global mean) is robust to outliers — see
+    the module docstring for the asymptotic-cap reasoning."""
     layer_failure_frac: float = Field(default=0.3, ge=0.0, le=1.0)
     """WARN when more than this fraction of layers cross the
     ``undertrained_layer_ratio`` threshold."""
@@ -188,6 +194,7 @@ class GradientGhostProbe(Probe):
         global_mean = statistics.fmean(finite_means)
         per_layer_means: dict[int, float] = {}
         per_layer_undertrained: list[int] = []
+        baseline_min: float = 0.0
 
         if grouping is not None and global_mean > 0.0:
             # Group finite per-param means by layer index.
@@ -201,18 +208,25 @@ class GradientGhostProbe(Probe):
             for layer_idx, vals in buckets.items():
                 if not vals:
                     continue
-                layer_mean = statistics.fmean(vals)
-                per_layer_means[layer_idx] = layer_mean
-                if layer_mean > spec.undertrained_layer_ratio * global_mean:
-                    per_layer_undertrained.append(layer_idx)
+                per_layer_means[layer_idx] = statistics.fmean(vals)
+            # Min-baseline ratio (see module docstring on why we use
+            # min instead of global mean — global-mean ratio is
+            # asymptotically capped and can't catch the case where K
+            # layers all spike together).
+            if per_layer_means:
+                baseline_min = min(per_layer_means.values())
+                if baseline_min > 0.0:
+                    for layer_idx, mean in per_layer_means.items():
+                        if mean > spec.undertrained_layer_ratio * baseline_min:
+                            per_layer_undertrained.append(layer_idx)
 
         frac_undertrained = len(per_layer_undertrained) / layer_count if layer_count > 0 else 0.0
 
-        # Top-3 worst layers (highest ratio) — useful evidence even
-        # when no layer crosses the threshold.
+        # Top-3 worst layers (highest ratio vs baseline_min) — useful
+        # evidence even when no layer crosses the threshold.
         ranked_layers = sorted(per_layer_means.items(), key=lambda kv: -kv[1])[:3]
         worst_layers = [
-            {"layer": idx, "ratio": (mean / global_mean) if global_mean > 0 else None}
+            {"layer": idx, "ratio": (mean / baseline_min) if baseline_min > 0 else None}
             for idx, mean in ranked_layers
         ]
 
