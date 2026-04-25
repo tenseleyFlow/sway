@@ -88,8 +88,11 @@ class _MLXView:
         input_ids = self._tokenizer.encode(prompt)
         tokens = mx.array(input_ids)[None, :]  # (1, T)
         out = self._model(tokens)
-        # mlx_lm models return an mx.array; convert to numpy for downstream math.
-        return np.asarray(out[0])
+        # mlx_lm models often emit bf16/fp16 arrays whose buffer
+        # protocol numpy doesn't understand directly. Cast to fp32
+        # in MLX before handing to numpy — keeps scoring math in
+        # fp32 anyway (downstream _log_softmax up-casts to fp64).
+        return np.asarray(out[0].astype(mx.float32))
 
     def logprob_of(self, prompt: str, completion: str) -> float:
         key_prompt = f"{prompt}\x00{completion}"
