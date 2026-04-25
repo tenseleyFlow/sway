@@ -88,8 +88,11 @@ class _MLXView:
         input_ids = self._tokenizer.encode(prompt)
         tokens = mx.array(input_ids)[None, :]  # (1, T)
         out = self._model(tokens)
-        # mlx_lm models return an mx.array; convert to numpy for downstream math.
-        return np.asarray(out[0])
+        # mlx_lm models often emit bf16/fp16 arrays whose buffer
+        # protocol numpy doesn't understand directly. Cast to fp32
+        # in MLX before handing to numpy — keeps scoring math in
+        # fp32 anyway (downstream _log_softmax up-casts to fp64).
+        return np.asarray(out[0].astype(mx.float32))
 
     def logprob_of(self, prompt: str, completion: str) -> float:
         key_prompt = f"{prompt}\x00{completion}"
@@ -212,7 +215,12 @@ class MLXDifferentialBackend:
         mx, mlx_lm = _require_mlx()
         self._mx = mx
         self._spec = base_spec
-        self._adapter_path = Path(adapter_path).expanduser().resolve()
+        raw_path = Path(adapter_path).expanduser().resolve()
+        # S24: when the user points us at a PEFT adapter (typical
+        # `dlm export` output), auto-convert into the user's cache
+        # so the headline `.dlm → sway` flow on MLX just works.
+        # Cached by content hash so repeated runs skip the convert.
+        self._adapter_path = _ensure_mlx_adapter(raw_path)
 
         # Load bare base (no adapter).
         self._base_model, self._tokenizer = mlx_lm.load(base_spec.base)
@@ -265,6 +273,67 @@ class MLXDifferentialBackend:
 
     def _exit(self) -> None:
         self._active = None
+
+
+def _ensure_mlx_adapter(adapter_path: Path) -> Path:
+    """Auto-convert PEFT adapters to MLX-LM format on first load (S24).
+
+    Detection is structural: if ``adapter_path/adapter_model.safetensors``
+    exists, we treat it as PEFT and run the converter. If it already
+    contains ``adapters.safetensors`` (mlx-lm's filename), we leave it
+    alone — assumes the user converted manually or the dir is already
+    MLX-shaped.
+
+    Cached at ``${XDG_CACHE_HOME:-$HOME/.cache}/dlm-sway/mlx-converted/<sha>/``
+    keyed on a hash of the source ``adapter_model.safetensors`` bytes.
+    Repeated runs on the same adapter version skip conversion entirely
+    (~10 ms hash + dir lookup).
+    """
+    if (adapter_path / "adapters.safetensors").exists():
+        # Already in MLX format — pass through unchanged.
+        return adapter_path
+    if not (adapter_path / "adapter_model.safetensors").exists():
+        # Neither MLX nor PEFT shape; let mlx_lm.load surface its own error.
+        return adapter_path
+
+    # Compute a content hash of the source PEFT safetensors. blake2b
+    # in 16-byte digest mode is overkill on file IO but unambiguous —
+    # different adapter versions never collide.
+    import hashlib
+
+    src_st = adapter_path / "adapter_model.safetensors"
+    h = hashlib.blake2b(digest_size=16)
+    with src_st.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    sha = h.hexdigest()
+
+    cache_root = _mlx_cache_root() / sha
+    if (cache_root / "adapters.safetensors").exists() and (
+        cache_root / "adapter_config.json"
+    ).exists():
+        return cache_root
+
+    # First-run conversion. Import here to keep the cycle off the
+    # import path of users who never touch MLX.
+    from dlm_sway.backends._mlx_convert import convert_peft_to_mlx
+
+    cache_root.mkdir(parents=True, exist_ok=True)
+    convert_peft_to_mlx(adapter_path, cache_root, overwrite=True)
+    return cache_root
+
+
+def _mlx_cache_root() -> Path:
+    """``$XDG_CACHE_HOME/dlm-sway/mlx-converted/`` (or ``~/.cache/...``).
+
+    Honors XDG so Linux users get their conventional cache location;
+    macOS users get ``~/.cache/...`` (XDG isn't standard on darwin
+    but uv + many Python tools follow this convention there too).
+    """
+    import os
+
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "dlm-sway" / "mlx-converted"
 
 
 def _log_softmax(x: np.ndarray, *, axis: int) -> np.ndarray:

@@ -50,6 +50,28 @@ sway --version
 sway doctor
 ```
 
+## MLX backend (Apple Silicon)
+
+Install the extra and point sway at any PEFT adapter — the MLX backend
+auto-converts on first load and caches the result under
+`~/.cache/dlm-sway/mlx-converted/<sha>/`. No manual `.npz` step.
+
+```bash
+pip install "dlm-sway[mlx]"
+
+# Either: let sway auto-convert when it loads the adapter
+sway run sway.yaml   # spec sets models.ft.kind: mlx, points at any PEFT dir
+
+# Or: convert explicitly (useful for inspection / scripting)
+sway convert-adapter ~/path/to/peft-adapter ~/path/to/mlx-adapter
+```
+
+Conversion is one-shot — repeated `sway run` invocations on the same
+adapter version short-circuit on a content hash. Supports standard
+LoRA on `q_proj` / `v_proj` / etc. QLoRA 4-bit and full-weight
+`modules_to_save` overrides aren't supported (the converter prints a
+clear warning if it sees them).
+
 ## Install from source
 
 For the development HEAD (unreleased changes, contributor workflow):
