@@ -103,11 +103,11 @@ class PreferenceFlipProbe(Probe):
             # batch down. Fence per triple so probes degrade gracefully:
             # drop the offending triple, count it, surface in evidence.
             try:
-                with ctx.backend.as_base() as b:
+                with ctx.require_backend.as_base() as b:
                     base_margin = b.logprob_of(t.prompt, t.chosen) - b.logprob_of(
                         t.prompt, t.rejected
                     )
-                with ctx.backend.as_finetuned() as f:
+                with ctx.require_backend.as_finetuned() as f:
                     ft_margin = f.logprob_of(t.prompt, t.chosen) - f.logprob_of(
                         t.prompt, t.rejected
                     )

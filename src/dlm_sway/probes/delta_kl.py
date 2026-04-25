@@ -93,9 +93,9 @@ class DeltaKLProbe(Probe):
         # manager entries. next_token_dist_batch falls back to a
         # per-prompt loop on backends without real batching so the
         # result list stays identical to the pre-S23 path.
-        with ctx.backend.as_base() as base_view:
+        with ctx.require_backend.as_base() as base_view:
             base_dists = base_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
-        with ctx.backend.as_finetuned() as ft_view:
+        with ctx.require_backend.as_finetuned() as ft_view:
             ft_dists = ft_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
         divergences: list[float] = [
             divergence(b, f, kind=spec.divergence)

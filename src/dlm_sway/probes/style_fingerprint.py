@@ -300,11 +300,11 @@ class StyleFingerprintProbe(Probe):
         base_samples: list[str] = []
         ft_samples: list[str] = []
         for prompt in spec.prompts:
-            with ctx.backend.as_base() as b:
+            with ctx.require_backend.as_base() as b:
                 base_samples.append(
                     b.generate(prompt, max_new_tokens=spec.max_new_tokens, seed=ctx.seed)
                 )
-            with ctx.backend.as_finetuned() as f:
+            with ctx.require_backend.as_finetuned() as f:
                 ft_samples.append(
                     f.generate(prompt, max_new_tokens=spec.max_new_tokens, seed=ctx.seed)
                 )

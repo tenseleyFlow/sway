@@ -192,9 +192,9 @@ class ClusterKLProbe(Probe):
         # S23 — per-prompt divergences, now via one batched forward
         # per view (same math as ``delta_kl``).
         top_k = spec.top_k if spec.top_k is not None else ctx.top_k
-        with ctx.backend.as_base() as base_view:
+        with ctx.require_backend.as_base() as base_view:
             base_dists = base_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
-        with ctx.backend.as_finetuned() as ft_view:
+        with ctx.require_backend.as_finetuned() as ft_view:
             ft_dists = ft_view.next_token_dist_batch(list(spec.prompts), top_k=top_k)
         divergences: list[float] = [
             divergence(b, f, kind=spec.divergence)

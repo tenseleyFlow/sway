@@ -147,9 +147,9 @@ class ExternalPerplexityProbe(Probe):
         total_base_lp = 0.0
         total_ft_lp = 0.0
         for chunk in chunks:
-            with ctx.backend.as_base() as b:
+            with ctx.require_backend.as_base() as b:
                 base_rl = b.rolling_logprob(chunk)
-            with ctx.backend.as_finetuned() as f:
+            with ctx.require_backend.as_finetuned() as f:
                 ft_rl = f.rolling_logprob(chunk)
             # Per-token mean logprob for this chunk. ``logprobs.size``
             # is ``num_tokens - 1`` by the RollingLogprob contract.
