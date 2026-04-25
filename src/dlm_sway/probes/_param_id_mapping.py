@@ -117,8 +117,10 @@ def map_param_ids_to_layers(adapter_dir: Path, num_params: int) -> LayerGrouping
 
     # Use ``safe_open`` so we never materialize the tensors — we only
     # need the key list. Saves the 7+ MB read on a typical adapter.
-    # safetensors ships no py.typed; safe_open is untyped to mypy.
-    with safe_open(  # type: ignore[no-untyped-call]
+    # safetensors ships no py.typed in some versions and a py.typed
+    # marker in others — silence both states (untyped-call when the
+    # marker is missing, unused-ignore when it's present).
+    with safe_open(  # type: ignore[no-untyped-call,unused-ignore]
         str(safetensors_path), framework="numpy", device="cpu"
     ) as fh:
         keys = list(fh.keys())
