@@ -2,6 +2,84 @@
 
 ## Unreleased
 
+### Sprint 25 — P3 gradient_ghost probe (pre-run, cross-repo)
+
+New zero-forward-pass diagnostic probe that loads dlm's
+`training_state.pt` and flags severely-undertrained adapters
+**before** any model load fires. Catches the 90%-case "user did
+`--max-steps 5` for a smoke test and forgot to retrain" in ~50 ms
+vs. the 30+ s `adapter_ablation` probe that previously was the only
+training-health signal.
+
+**Probe + supporting modules.**
+
+- **`probes/gradient_ghost.GradientGhostProbe`** — category
+  `calibration`, `needs_backend = False`. Verdict ladder:
+  `global_step < min_steps_threshold` → FAIL (primary signal); all
+  per-param `exp_avg_sq` NaN → FAIL; per-layer ratio against the
+  *minimum* layer's mean (not global mean — see module docstring on
+  asymptotic-cap reasoning) flags layers > `undertrained_layer_ratio`;
+  > `layer_failure_frac` of layers crossing → FAIL/WARN. Configurable
+  thresholds `min_steps_threshold=50`, `undertrained_layer_ratio=2.0`,
+  `layer_failure_frac=0.3`.
+- **`probes/_training_state.py`** — torch.load wrapper for
+  `training_state.pt`. Frozen `TrainingStateSnapshot` + `ParamStat`
+  dataclasses. Lazy torch import (no cost on `import dlm_sway` for
+  non-gradient-ghost users). Suppresses the FutureWarning around
+  `weights_only=False` since dlm's pickled RNG state requires it.
+- **`probes/_param_id_mapping.py`** — maps optimizer-state integer
+  param-ids to transformer-layer indices via the adapter's
+  `adapter_model.safetensors` keys. Heterogeneous-per-layer counts
+  raise `ParamMappingError` rather than silently mis-attributing.
+  Uses `safetensors.safe_open` so we read keys without
+  materializing tensors.
+- **`core/errors.MissingTrainingStateError`** — typed exception so
+  the probe can SKIP cleanly when `training_state.pt` legitimately
+  isn't there (non-dlm adapters), distinct from a parse error.
+
+**Probe-ABC + runner contract for pre-run probes.**
+
+- **`probes/base.Probe.needs_backend: ClassVar[bool] = True`** —
+  new opt-in flag. Default `True` preserves every shipped probe's
+  contract.
+- **`probes/base.RunContext.backend: DifferentialBackend | None`** —
+  was required, now optional. New `RunContext.require_backend`
+  property narrows the type for mypy + raises a clear runtime error
+  if a probe with `needs_backend=True` somehow gets a `None`
+  backend.
+- **`probes/*` sweep** — every existing probe now reads
+  `ctx.require_backend.as_base()` instead of `ctx.backend.as_base()`.
+  No behavior change; mypy-correct under the new optional type.
+- **`suite/runner.run`** accepts `backend=None`. Pre-resolves all
+  scheduled probes; if any has `needs_backend=True` while
+  `backend=None`, raises `BackendNotAvailableError` with the
+  offending probe kinds in the message. Skips trace-writer install,
+  preflight finite-check, probe-label setting, and backend-stats
+  snapshot when backend is absent.
+
+**`sway check` integration.**
+
+- **`cli/commands.check_cmd`** runs `gradient_ghost` first in the
+  quick battery (along with `null_adapter` + `delta_kl` +
+  `calibration_drift`). On FAIL, emits a red ⚠️ banner before the
+  regular verdict banner; on WARN, a yellow one. Informational —
+  no exit-code change. Banner shows the probe's actionable
+  message ("severely undertrained: global_step=N < threshold X").
+
+**Tests.**
+
+- **17 unit tests** (`tests/unit/test_probe_gradient_ghost.py`):
+  registry / `needs_backend` flag / verdict-ladder branches
+  (PASS / FAIL on global_step / FAIL on all-NaN / WARN / FAIL on
+  many-layers / SKIP on missing) / `_param_id_mapping` correctness
+  + error paths / `_training_state` loader edge cases / runner
+  skip-backend contract.
+- **3 integration tests** (`tests/integration/test_probe_gradient_ghost.py`,
+  slow+online): real-store FAIL on `~/.dlm/store/01KPPFAB.../v0001`
+  (skipped on machines without local dlm install — typical CI),
+  synthetic converged → PASS, runner end-to-end with backend=None.
+- All 691 unit tests pass; mypy + ruff + format clean.
+
 ### Sprint 24 — F01 PEFT→MLX adapter converter
 
 Closes the audit's #1 major finding: the README pitched MLX as a
