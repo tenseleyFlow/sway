@@ -138,6 +138,21 @@ class Probe(ABC):
     category: ClassVar[str] = "adherence"
     """One of: ``adherence``, ``attribution``, ``calibration``,
     ``ablation``, ``baseline``. Drives composite scoring."""
+    needs_backend: ClassVar[bool] = True
+    """Does this probe ever call ``ctx.backend``?
+
+    Default ``True`` — every probe shipped through Sprint 24 reads
+    next-token distributions or logprobs from a backend view. The
+    runner therefore builds the backend before any probe runs.
+
+    Set ``False`` for **pre-run diagnostic probes** that consume
+    artifacts on disk (e.g. S25's ``gradient_ghost`` which loads
+    ``training_state.pt``). When *every* scheduled probe has
+    ``needs_backend=False``, the runner skips backend construction
+    entirely — no model load, no GPU memory, no cold-start
+    latency. Pre-flight verdicts can short-circuit a slow suite
+    when the adapter is obviously broken.
+    """
     batch_score: ClassVar[bool] = False
     """Does this probe score its prompts via the backend's batched
     :meth:`~dlm_sway.core.scoring.ScoringBackend.next_token_dist_batch`
