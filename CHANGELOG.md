@@ -2,6 +2,86 @@
 
 ## Unreleased
 
+### Sprint 24 — F01 PEFT→MLX adapter converter
+
+Closes the audit's #1 major finding: the README pitched MLX as a
+co-equal backend, but the path required a pre-converted `.npz`
+adapter that nothing in the toolchain produced. With this sprint,
+`dlm train` → `sway run` on the MLX backend works end-to-end on any
+PEFT-trained LoRA adapter.
+
+**Converter (pure I/O, no torch dep).**
+
+- **`backends/_mlx_convert.convert_peft_to_mlx`** — reads PEFT's
+  `adapter_model.safetensors` + `adapter_config.json`, transposes
+  LoRA matrices to MLX's layout, writes `adapters.safetensors` +
+  mlx-lm-shaped `adapter_config.json`. Verified against PEFT >= 0.13
+  + mlx-lm 0.31.
+- **Key remap.** PEFT's
+  `base_model.model.<dotted>.lora_<A|B>.weight` becomes MLX's
+  `<dotted>.lora_<a|b>`. Modern PEFT keys (no `.default` adapter-name
+  segment) and legacy `.default.weight` keys both supported.
+- **Shape transpose.** PEFT `lora_A=(r, in)` → MLX `lora_a=(in, r)`;
+  PEFT `lora_B=(out, r)` → MLX `lora_b=(r, out)`.
+- **Config remap.** Writes `fine_tune_type=lora`, `num_layers`
+  inferred from max layer index in the keys, `lora_parameters` with
+  `rank/scale=alpha÷r/dropout/keys` (per-layer-relative attribute
+  paths like `self_attn.q_proj`).
+- **Errors.** Missing files / non-LORA peft_type / invalid rank /
+  unexpected key prefixes / dst-not-empty all surface as typed
+  `MlxConvertError` with actionable messages. `modules_to_save`
+  tensors (e.g. `embed_tokens`, `lm_head` overrides) are skipped
+  with a per-key warning rather than crashing.
+
+**CLI surface.**
+
+- **`sway convert-adapter [--target mlx] SRC DST [--overwrite]`** —
+  thin wrapper over the converter. Prints a before/after size +
+  rank/scale report; surfaces `MlxConvertError` with a non-zero
+  exit code; warns on skipped `modules_to_save` keys via stderr.
+
+**MLX backend integration.**
+
+- **`backends/mlx._ensure_mlx_adapter`** — auto-detect: if the
+  adapter dir contains `adapter_model.safetensors`, run the
+  converter into a content-hashed cache at
+  `${XDG_CACHE_HOME:-$HOME/.cache}/dlm-sway/mlx-converted/<blake2b>/`,
+  point mlx-lm at the cache. If the dir already contains
+  `adapters.safetensors`, pass through unchanged. Uses 16-byte
+  blake2b on the source safetensors bytes — repeat loads on the
+  same adapter version short-circuit (~10 ms hash + dir lookup).
+- **`backends/mlx._MLXView._forward_logits`** — adjacent fix:
+  `out[0].astype(mx.float32)` before `np.asarray` so unquantized
+  bf16/fp16 model outputs round-trip correctly. Pre-existing bug
+  surfaced by the new e2e test against `mlx-community/SmolLM2-135M-Instruct`.
+
+**Tests.**
+
+- **`tests/unit/test_mlx_convert`** — 20 tests across:
+  - Helper functions (`_strip_layer_prefix`, `_extract_layer_index`).
+  - Happy path: synthetic PEFT adapter → MLX adapter, expected file
+    layout, config shape, rank/scale math, key transpose, value
+    preservation.
+  - Error paths: missing safetensors / config, non-LORA peft_type,
+    invalid rank, dst-not-empty without `--overwrite`, unexpected
+    key prefix, `modules_to_save` skip-and-report.
+  - Auto-convert detection: pass-through on already-MLX dir, fresh
+    convert on PEFT dir, cache short-circuit, unrecognized dir
+    pass-through.
+- **`tests/integration/test_mlx_converter_e2e`** — 4 darwin-arm64
+  slow+online tests on real `mlx-community/SmolLM2-135M-Instruct`:
+  XDG cache populated by backend init, `next_token_dist` returns
+  finite top-k via converted adapter, `logprob_of` works, repeat
+  load skips reconvert (mtime check). Skipped on non-darwin /
+  missing `[mlx]` extra.
+
+**README.**
+
+- New "MLX backend (Apple Silicon)" section with the two install
+  paths (auto-convert via `sway run` vs. explicit `sway convert-adapter`).
+  Documents the cache location and out-of-scope items (QLoRA,
+  `modules_to_save`).
+
 ### Sprint 23 — H1 batched backend execution
 
 Opens the door to 3-5× wall-time reduction on HF-backend suites by
