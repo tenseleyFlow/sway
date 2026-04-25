@@ -18,9 +18,18 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from safetensors.numpy import load_file, save_file
 
-from dlm_sway.backends._mlx_convert import (
+# safetensors ships in the [hf] extra (not [dev]). The fast lane runs
+# without [hf]; skip the whole module when missing rather than fail
+# collection. Local + slow-lane runs install [hf] and exercise these.
+safetensors_numpy = pytest.importorskip(
+    "safetensors.numpy",
+    reason="safetensors not installed (install via the [hf] extra)",
+)
+load_file = safetensors_numpy.load_file
+save_file = safetensors_numpy.save_file
+
+from dlm_sway.backends._mlx_convert import (  # noqa: E402 — import-after-skip
     MlxConvertError,
     _extract_layer_index,
     _strip_layer_prefix,
