@@ -52,6 +52,7 @@ app.command("compare")(commands.compare_cmd)
 app.command("trace")(commands.trace_cmd)
 app.command("mine")(commands.mine_cmd)
 app.command("list-probes")(commands.list_probes_cmd)
+app.command("convert-adapter")(commands.convert_adapter_cmd)
 
 
 def main() -> None:

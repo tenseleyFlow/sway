@@ -1151,3 +1151,60 @@ def _close_if_possible(backend: object) -> None:
     close = getattr(backend, "close", None)
     if callable(close):
         close()
+
+
+# --- convert-adapter (S24, F01) ------------------------------------------
+
+
+class ConvertTarget(StrEnum):
+    MLX = "mlx"
+
+
+def convert_adapter_cmd(
+    src: Annotated[Path, typer.Argument(help="PEFT adapter directory to convert.")],
+    dst: Annotated[Path, typer.Argument(help="Output directory for the converted adapter.")],
+    target: Annotated[
+        ConvertTarget,
+        typer.Option("--target", help="Output adapter format. Currently only 'mlx'."),
+    ] = ConvertTarget.MLX,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Replace any existing adapter at dst."),
+    ] = False,
+) -> None:
+    """Convert a PEFT LoRA adapter to another backend's format.
+
+    Today the only target is ``mlx`` — converts ``adapter_model.safetensors`` +
+    ``adapter_config.json`` (PEFT) to ``adapters.safetensors`` +
+    ``adapter_config.json`` (mlx-lm). Closes the F01 doc-vs-code gap so
+    the MLX backend works on dlm-trained / any PEFT-trained adapters
+    without manual conversion.
+    """
+    from dlm_sway.backends._mlx_convert import MlxConvertError, convert_peft_to_mlx
+
+    if target is not ConvertTarget.MLX:
+        raise typer.BadParameter(f"unsupported target {target!r}")
+    try:
+        report = convert_peft_to_mlx(src, dst, overwrite=overwrite)
+    except MlxConvertError as exc:
+        typer.secho(f"convert-adapter: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except SwayError as exc:
+        typer.secho(f"convert-adapter: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    src_kb = report["src_bytes"] / 1024
+    dst_kb = report["dst_bytes"] / 1024
+    typer.echo(
+        f"converted: {src} → {dst}  rank={report['rank']}  "
+        f"scale={report['scale']:.3f}  num_keys={report['num_keys']}  "
+        f"({src_kb:.1f} KB → {dst_kb:.1f} KB)"
+    )
+    if report["modules_to_save_skipped"]:
+        typer.secho(
+            f"warning: {len(report['modules_to_save_skipped'])} modules_to_save tensor(s) "
+            f"skipped (mlx-lm's LoRA loader doesn't apply full-weight overrides). "
+            f"Sample: {report['modules_to_save_skipped'][:1]!r}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
