@@ -347,6 +347,15 @@ def check_cmd(
         models=SuiteModels(base=base_spec, ft=ft_spec),
         defaults=SuiteDefaults(seed=0),
         suite=[
+            # S25: pre-run training-health check first. SKIPs cleanly
+            # when the adapter wasn't produced by dlm (no
+            # training_state.pt); FAILs loudly on severely-undertrained
+            # adapters with a banner before the rest of the output.
+            {
+                "name": "quick_gradient_ghost",
+                "kind": "gradient_ghost",
+                "adapter_path": str(adapter),
+            },
             # Calibrate first so delta_kl can publish a z-score the
             # banner reads off.
             {"name": "quick_null", "kind": "null_adapter", "runs": 3},
@@ -378,11 +387,57 @@ def check_cmd(
     # D12: top-line banner before the full report so a user looking
     # only at the first line still gets the verdict.
     console = Console()
+
+    # S25 — pre-flight gradient_ghost banner. Fires BEFORE the verdict
+    # banner so the user sees "this adapter is undertrained" first;
+    # the rest of the check output stays for context (the user might
+    # still want to see how badly the other probes scored).
+    _emit_gradient_ghost_banner(result, console)
+
     banner_text, banner_style = _check_banner(score_obj, result)
     console.print()
     console.print(banner_text, style=banner_style)
     console.print()
     report.to_terminal(result, score_obj, console=console)
+
+
+def _emit_gradient_ghost_banner(result: object, console: Console) -> None:
+    """Print a yellow/red ⚠️ banner if gradient_ghost FAILed (S25 P6).
+
+    Reaches into ``result.probes`` for any probe with
+    ``kind=gradient_ghost`` and verdict FAIL. Informational — no
+    effect on exit code; the user might still want to inspect the
+    other probes' verdicts.
+    """
+    probes = getattr(result, "probes", ()) or ()
+    for p in probes:
+        if getattr(p, "kind", "") != "gradient_ghost":
+            continue
+        verdict_str = str(getattr(p, "verdict", "")).lower()
+        if verdict_str == "fail":
+            console.print()
+            console.print(
+                "⚠️  PRE-RUN ALERT — gradient_ghost flagged severe undertraining",
+                style="bold red",
+            )
+            msg = getattr(p, "message", "")
+            if msg:
+                console.print(f"   {msg}", style="red")
+            console.print(
+                "   The probe scores below may be unreliable. Consider retraining.",
+                style="dim red",
+            )
+            return
+        if verdict_str == "warn":
+            console.print()
+            console.print(
+                "⚠️  gradient_ghost: training may not have fully converged",
+                style="bold yellow",
+            )
+            msg = getattr(p, "message", "")
+            if msg:
+                console.print(f"   {msg}", style="yellow")
+            return
 
 
 def diff_cmd(

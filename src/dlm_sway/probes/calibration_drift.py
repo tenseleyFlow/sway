@@ -109,9 +109,9 @@ class CalibrationDriftProbe(Probe):
 
         for prompt, gold in items:
             tokens = max(_token_estimate(gold), 1)
-            with ctx.backend.as_base() as b:
+            with ctx.require_backend.as_base() as b:
                 lp_base = b.logprob_of(prompt, gold) / tokens
-            with ctx.backend.as_finetuned() as f:
+            with ctx.require_backend.as_finetuned() as f:
                 lp_ft = f.logprob_of(prompt, gold) / tokens
             delta = lp_ft - lp_base
             deltas.append(delta)

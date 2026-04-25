@@ -115,10 +115,10 @@ class ParaphraseInvarianceProbe(Probe):
 
         for case in spec.cases:
             tokens = max(_token_estimate(case.gold), 1)
-            with ctx.backend.as_base() as b:
+            with ctx.require_backend.as_base() as b:
                 lp_base_verb = b.logprob_of(case.prompt, case.gold) / tokens
                 lp_base_par = [b.logprob_of(p, case.gold) / tokens for p in case.paraphrases]
-            with ctx.backend.as_finetuned() as f:
+            with ctx.require_backend.as_finetuned() as f:
                 lp_ft_verb = f.logprob_of(case.prompt, case.gold) / tokens
                 lp_ft_par = [f.logprob_of(p, case.gold) / tokens for p in case.paraphrases]
 

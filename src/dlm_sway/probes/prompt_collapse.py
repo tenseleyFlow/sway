@@ -100,9 +100,9 @@ class PromptCollapseProbe(Probe):
             divs: list[float] = []
             for prompt in spec.prompts:
                 full_prompt = prefix + prompt
-                with ctx.backend.as_base() as bv:
+                with ctx.require_backend.as_base() as bv:
                     base_dist = bv.next_token_dist(full_prompt, top_k=top_k)
-                with ctx.backend.as_finetuned() as fv:
+                with ctx.require_backend.as_finetuned() as fv:
                     ft_dist = fv.next_token_dist(full_prompt, top_k=top_k)
                 divs.append(divergence(base_dist, ft_dist, kind=spec.divergence))
             mean_divs.append(float(np.mean(divs)))

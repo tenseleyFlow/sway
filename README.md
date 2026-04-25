@@ -95,6 +95,35 @@ Outputs a verdict in under a minute on CPU for small models: *your
 adapter is 4.2σ above noise* ✅ or *indistinguishable from a null
 adapter* ❌.
 
+## Pre-run diagnostics
+
+If your adapter was trained with [DocumentLanguageModel](https://github.com/tenseleyFlow/DocumentLanguageModel),
+`sway check` runs the **`gradient_ghost`** probe first — a ~50 ms
+disk-only inspection of dlm's `training_state.pt`. It catches
+adapters that are obviously broken (e.g. left at `--max-steps 5`
+from a smoke test) **before** the model ever loads, with a banner
+on top of the regular verdict:
+
+```
+⚠️  PRE-RUN ALERT — gradient_ghost flagged severe undertraining
+   severely undertrained: global_step=2 < threshold 50.
+   The probe scores below may be unreliable. Consider retraining.
+```
+
+The probe's signal ladder, in order of decisiveness:
+
+1. `global_step` below a configurable threshold (default 50) → FAIL.
+2. Every per-param `exp_avg_sq` is NaN → FAIL.
+3. More than 30% of LoRA layers show >2× the lowest layer's
+   gradient variance → FAIL or WARN.
+4. Otherwise → PASS.
+
+Specs that contain *only* pre-run diagnostics like `gradient_ghost`
+skip backend construction entirely — `sway run` against a pre-flight
+spec doesn't load a model, doesn't allocate GPU memory, doesn't pay
+the cold-start tax. Useful for `pre-commit` gates that should fast-
+path adapter sanity before authorizing the full battery.
+
 ## Full suite
 
 ```yaml

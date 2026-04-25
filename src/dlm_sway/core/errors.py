@@ -65,6 +65,25 @@ class ProbeError(SwayError):
         self.probe = probe
 
 
+class MissingTrainingStateError(SwayError):
+    """The pre-run probes (S25 ``gradient_ghost``) couldn't find a
+    ``training_state.pt`` next to the adapter.
+
+    Distinguishes "the file legitimately doesn't exist for this adapter"
+    (probe SKIPs cleanly) from "the file exists but won't load"
+    (probe ERRORs). Pre-run probes catch this and emit SKIP rather
+    than letting the missing file kill the suite.
+    """
+
+    def __init__(self, adapter_path: object) -> None:
+        super().__init__(
+            f"no training_state.pt under {adapter_path} — adapter wasn't "
+            f"produced by dlm or the file was pruned. Pre-run diagnostics "
+            f"(gradient_ghost) will SKIP for this adapter."
+        )
+        self.adapter_path = adapter_path
+
+
 class DlmCompatError(SwayError):
     """The installed ``dlm`` package's public surface doesn't match what
     sway's resolver expects.

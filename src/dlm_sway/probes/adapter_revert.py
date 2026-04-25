@@ -104,9 +104,9 @@ class AdapterRevertProbe(Probe):
         for case in spec.cases:
             gold_vec = embed([case.gold])[0]
             for pp in case.paraphrases:
-                with ctx.backend.as_base() as bv:
+                with ctx.require_backend.as_base() as bv:
                     base_gen = bv.generate(pp, max_new_tokens=spec.max_new_tokens, seed=ctx.seed)
-                with ctx.backend.as_finetuned() as fv:
+                with ctx.require_backend.as_finetuned() as fv:
                     ft_gen = fv.generate(pp, max_new_tokens=spec.max_new_tokens, seed=ctx.seed)
                 vecs = embed([base_gen, ft_gen])
                 base_vec, ft_vec = vecs[0], vecs[1]

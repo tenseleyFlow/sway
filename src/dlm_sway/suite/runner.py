@@ -24,7 +24,7 @@ from types import MappingProxyType
 
 from dlm_sway import __version__
 from dlm_sway.core.determinism import seed_everything
-from dlm_sway.core.errors import ProbeError
+from dlm_sway.core.errors import BackendNotAvailableError, ProbeError
 from dlm_sway.core.result import DeterminismReport, ProbeResult, SuiteResult, Verdict, utcnow
 from dlm_sway.core.scoring import DifferentialBackend, PreflightCheckable
 from dlm_sway.core.sections import Section
@@ -35,7 +35,7 @@ from dlm_sway.suite.spec import SwaySpec
 
 def run(
     spec: SwaySpec,
-    backend: DifferentialBackend,
+    backend: DifferentialBackend | None,
     *,
     spec_path: str = "<memory>",
     doc_text: str | None = None,
@@ -54,8 +54,37 @@ def run(
 
     Set ``skip_preflight=True`` to disable the gate (e.g., for sub-second
     test suites where the cost matters); the default is to run it.
+
+    **S25 — backend-optional path.** ``backend`` may be ``None`` when
+    every scheduled probe declares ``needs_backend=False`` (e.g. a
+    suite composed entirely of pre-run diagnostic probes like
+    ``gradient_ghost``). In that case the runner skips backend-related
+    work (preflight, trace writer, backend-stats snapshot) and the
+    caller can avoid building a model entirely. Passing ``None`` while
+    any probe needs a backend raises ``BackendNotAvailableError``
+    listing the offending probe kinds.
     """
     started = utcnow()
+
+    # S25 — backend-optional gate. Resolve every probe class up front
+    # so we can decide whether the backend is actually needed before
+    # any expensive work fires. (build_probe is cheap — pydantic
+    # validation only.)
+    _scheduled_probes = [build_probe(raw) for raw in spec.suite]
+    _needs_backend_kinds = sorted(
+        {ps.kind for probe, ps in _scheduled_probes if probe.__class__.needs_backend and ps.enabled}
+    )
+    if backend is None and _needs_backend_kinds:
+        raise BackendNotAvailableError(
+            f"<runner: spec={spec_path}>",
+            extra="hf",
+            hint=(
+                "The runner was called with backend=None but the suite "
+                f"includes probes that require a backend: "
+                f"{_needs_backend_kinds}. Build a backend before calling "
+                "run(), or remove those probes from the suite."
+            ),
+        )
 
     # Sprint 07: ``concurrent_probes`` is scaffolding. The HF and MLX
     # backends declare ``safe_for_concurrent_views = False`` so the
@@ -84,8 +113,9 @@ def run(
     # Sprint 07: attach a trace writer to the backend's
     # instrumentation if the caller asked for one. Silent no-op for
     # backends without ``_inst`` (custom backends) and for the default
-    # ``trace_path=None`` case.
-    _install_trace_writer(backend, trace_path)
+    # ``trace_path=None`` case. S25 — also skipped when backend is None.
+    if backend is not None:
+        _install_trace_writer(backend, trace_path)
 
     ctx = RunContext(
         backend=backend,
@@ -100,8 +130,10 @@ def run(
     null_stats_by_rank: dict[str, dict[str, dict[str, float]]] = {}
 
     # Preflight gate: if the backend can self-check, do so before any
-    # probe runs. A failing preflight aborts the suite.
-    if not skip_preflight and isinstance(backend, PreflightCheckable):
+    # probe runs. A failing preflight aborts the suite. S25 — when
+    # backend is None (only pre-run probes scheduled), preflight is
+    # also skipped since there's no model state to check.
+    if not skip_preflight and backend is not None and isinstance(backend, PreflightCheckable):
         t0 = time.perf_counter()
         ok, reason = backend.preflight_finite_check()
         duration = time.perf_counter() - t0
@@ -136,8 +168,7 @@ def run(
     # Pre-extract suite kinds so each probe sees only what's *after* it.
     suite_kinds: list[str] = [str(entry.get("kind", "")) for entry in spec.suite]
 
-    for idx, raw in enumerate(spec.suite):
-        probe, probe_spec = build_probe(raw)
+    for idx, (probe, probe_spec) in enumerate(_scheduled_probes):
         if not probe_spec.enabled:
             results.append(
                 ProbeResult(
@@ -166,8 +197,10 @@ def run(
         )
 
         # Label trace events with the currently-running probe so the
-        # JSONL is filterable by probe name.
-        _set_backend_probe_label(backend, probe_spec.name)
+        # JSONL is filterable by probe name. Skipped when backend is
+        # None (S25 pre-run-only suite path).
+        if backend is not None:
+            _set_backend_probe_label(backend, probe_spec.name)
 
         t0 = time.perf_counter()
         try:
@@ -211,7 +244,8 @@ def run(
                 null_stats_by_rank=MappingProxyType(null_stats_by_rank),
             )
 
-    _set_backend_probe_label(backend, None)
+    if backend is not None:
+        _set_backend_probe_label(backend, None)
     finished = utcnow()
     return SuiteResult(
         spec_path=spec_path,
@@ -251,8 +285,13 @@ def _set_backend_probe_label(backend: DifferentialBackend, name: str | None) -> 
     inst.set_current_probe(name)
 
 
-def _snapshot_backend_stats(backend: DifferentialBackend) -> dict[str, float | int]:
-    """Copy the backend's counters into a plain dict for ``SuiteResult``."""
+def _snapshot_backend_stats(backend: DifferentialBackend | None) -> dict[str, float | int]:
+    """Copy the backend's counters into a plain dict for ``SuiteResult``.
+
+    Empty dict when backend is None (S25 pre-run-only suite path).
+    """
+    if backend is None:
+        return {}
     inst = getattr(backend, "_inst", None)
     if inst is None:
         return {}

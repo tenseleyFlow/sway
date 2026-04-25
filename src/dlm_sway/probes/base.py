@@ -90,7 +90,18 @@ class RunContext:
         to calibrate per-kind null stats for.
     """
 
-    backend: DifferentialBackend
+    backend: DifferentialBackend | None = None
+    """The model-scoring backend. Required for every probe with
+    ``needs_backend=True`` (the default). Pre-run probes
+    (``needs_backend=False``, e.g. S25 ``gradient_ghost``) tolerate
+    ``None`` here so the runner can skip backend construction
+    entirely when only pre-flight probes are scheduled.
+
+    Existing probes access ``self.require_backend`` instead of
+    ``backend`` directly — the property narrows the type for mypy
+    and gives a clear runtime error if the runner ever passes
+    ``None`` to a probe that needs the backend.
+    """
     seed: int = 0
     top_k: int = 256
     sections: tuple[Section, ...] | None = None
@@ -100,6 +111,26 @@ class RunContext:
         default_factory=dict
     )
     downstream_kinds: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def require_backend(self) -> DifferentialBackend:
+        """Return :attr:`backend`, asserting non-None.
+
+        Probes with ``needs_backend=True`` (default) call this to
+        narrow the type from ``DifferentialBackend | None`` to
+        ``DifferentialBackend``. The runner contract guarantees
+        non-None when scheduling backend-dependent probes; this
+        accessor turns a runner bug into a clear error rather than
+        a confusing AttributeError on ``None.as_base()``.
+        """
+        if self.backend is None:
+            raise RuntimeError(
+                "RunContext.backend is None — probe requires a backend "
+                "(needs_backend=True) but the runner did not provide one. "
+                "If this is a pre-run probe, set needs_backend=False on "
+                "the Probe subclass."
+            )
+        return self.backend
 
 
 _REGISTRY: dict[str, type[Probe]] = {}
@@ -138,6 +169,21 @@ class Probe(ABC):
     category: ClassVar[str] = "adherence"
     """One of: ``adherence``, ``attribution``, ``calibration``,
     ``ablation``, ``baseline``. Drives composite scoring."""
+    needs_backend: ClassVar[bool] = True
+    """Does this probe ever call ``ctx.backend``?
+
+    Default ``True`` — every probe shipped through Sprint 24 reads
+    next-token distributions or logprobs from a backend view. The
+    runner therefore builds the backend before any probe runs.
+
+    Set ``False`` for **pre-run diagnostic probes** that consume
+    artifacts on disk (e.g. S25's ``gradient_ghost`` which loads
+    ``training_state.pt``). When *every* scheduled probe has
+    ``needs_backend=False``, the runner skips backend construction
+    entirely — no model load, no GPU memory, no cold-start
+    latency. Pre-flight verdicts can short-circuit a slow suite
+    when the adapter is obviously broken.
+    """
     batch_score: ClassVar[bool] = False
     """Does this probe score its prompts via the backend's batched
     :meth:`~dlm_sway.core.scoring.ScoringBackend.next_token_dist_batch`

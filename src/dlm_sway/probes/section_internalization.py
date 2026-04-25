@@ -111,10 +111,10 @@ class SectionInternalizationProbe(Probe):
         # re-running the forward pass for leak-checks.
         base_nll: dict[str, float] = {}
         ft_nll: dict[str, float] = {}
-        with ctx.backend.as_base() as base_view:
+        with ctx.require_backend.as_base() as base_view:
             for s in eligible:
                 base_nll[s.id] = _section_nll(s, base_view, spec.max_prose_chars)
-        with ctx.backend.as_finetuned() as ft_view:
+        with ctx.require_backend.as_finetuned() as ft_view:
             for s in eligible:
                 ft_nll[s.id] = _section_nll(s, ft_view, spec.max_prose_chars)
 

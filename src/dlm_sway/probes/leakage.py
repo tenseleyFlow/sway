@@ -120,7 +120,7 @@ class LeakageSusceptibilityProbe(Probe):
         perturbed_recalls: list[float] = []
         per_section: list[dict[str, float | str]] = []
 
-        with ctx.backend.as_finetuned() as ft:
+        with ctx.require_backend.as_finetuned() as ft:
             for s in prose:
                 prefix = s.content[: spec.prefix_chars]
                 target = s.content[spec.prefix_chars : spec.prefix_chars + spec.continuation_chars]

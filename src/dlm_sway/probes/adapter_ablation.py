@@ -89,7 +89,11 @@ class AdapterAblationProbe(Probe):
                 score=None,
                 message="no prompts provided",
             )
-        if not isinstance(ctx.backend, ScalableDifferentialBackend):
+        # Local binding so mypy keeps the ScalableDifferentialBackend
+        # narrowing across the loop below (require_backend's return
+        # type is the base DifferentialBackend; we narrow once here).
+        scalable = ctx.backend
+        if not isinstance(scalable, ScalableDifferentialBackend):
             return ProbeResult(
                 name=spec.name,
                 kind=spec.kind,
@@ -109,9 +113,9 @@ class AdapterAblationProbe(Probe):
         for lam in spec.lambdas:
             divs_for_lam: list[float] = []
             for prompt in spec.prompts:
-                with ctx.backend.as_scaled_adapter(lam_zero) as ref:
+                with scalable.as_scaled_adapter(lam_zero) as ref:
                     ref_dist = ref.next_token_dist(prompt, top_k=top_k)
-                with ctx.backend.as_scaled_adapter(lam) as scaled:
+                with scalable.as_scaled_adapter(lam) as scaled:
                     scaled_dist = scaled.next_token_dist(prompt, top_k=top_k)
                 divs_for_lam.append(divergence(ref_dist, scaled_dist, kind=spec.divergence))
             per_lambda.append(float(np.mean(divs_for_lam)))
