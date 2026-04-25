@@ -234,6 +234,74 @@ class TestConvertPeftToMlxErrors:
             convert_peft_to_mlx(src, tmp_path / "mlx")
 
 
+class TestEnsureMlxAdapterAutoConvert:
+    """``MLXDifferentialBackend.__init__`` calls ``_ensure_mlx_adapter``
+    to upgrade PEFT-shaped adapter dirs to MLX format on the fly. The
+    function lives in ``backends/mlx.py`` so it doesn't pull mlx-lm
+    when the path is already MLX-shaped."""
+
+    def test_passes_through_when_dir_is_already_mlx_shape(self, tmp_path: Path) -> None:
+        """Existing ``adapters.safetensors`` → no conversion, return
+        the same path unchanged. (Manual conversions / pre-built MLX
+        adapters from other tools must not be re-converted.)"""
+        from dlm_sway.backends.mlx import _ensure_mlx_adapter
+
+        mlx_dir = tmp_path / "mlx"
+        mlx_dir.mkdir()
+        save_file({}, str(mlx_dir / "adapters.safetensors"))
+        (mlx_dir / "adapter_config.json").write_text('{"fine_tune_type":"lora"}')
+        out = _ensure_mlx_adapter(mlx_dir)
+        assert out == mlx_dir
+
+    def test_auto_converts_peft_dir_into_cache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PEFT-shaped dir gets converted into XDG_CACHE_HOME on
+        first call; the returned path is the cache dir, not the source."""
+        from dlm_sway.backends.mlx import _ensure_mlx_adapter
+
+        cache_root = tmp_path / "cache"
+        monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root))
+
+        peft_dir = tmp_path / "peft"
+        _write_synthetic_peft_adapter(peft_dir)
+        out = _ensure_mlx_adapter(peft_dir)
+
+        assert out != peft_dir
+        assert (out / "adapters.safetensors").exists()
+        assert (out / "adapter_config.json").exists()
+        assert str(out).startswith(str(cache_root))
+
+    def test_repeated_calls_short_circuit_on_cache_hit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same PEFT bytes → same cache hash → second call returns the
+        cached dir without re-converting (touch mtime to detect)."""
+        from dlm_sway.backends.mlx import _ensure_mlx_adapter
+
+        monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+        peft_dir = tmp_path / "peft"
+        _write_synthetic_peft_adapter(peft_dir)
+
+        first = _ensure_mlx_adapter(peft_dir)
+        first_mtime = (first / "adapters.safetensors").stat().st_mtime_ns
+
+        # Second call — should NOT rewrite the file.
+        second = _ensure_mlx_adapter(peft_dir)
+        assert second == first
+        assert (second / "adapters.safetensors").stat().st_mtime_ns == first_mtime
+
+    def test_passes_through_unrecognized_dir(self, tmp_path: Path) -> None:
+        """A directory with neither shape — let mlx_lm.load surface
+        its own error rather than this helper second-guessing."""
+        from dlm_sway.backends.mlx import _ensure_mlx_adapter
+
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        out = _ensure_mlx_adapter(empty)
+        assert out == empty
+
+
 class TestModulesToSave:
     """``modules_to_save`` (e.g. embed_tokens, lm_head) must be skipped
     cleanly with a report entry, not crash the converter."""
