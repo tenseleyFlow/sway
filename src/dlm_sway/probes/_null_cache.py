@@ -25,10 +25,29 @@ from typing import Any
 #: / CI tests that want to prove calibration actually runs).
 _ENV_DISABLE = "SWAY_DISABLE_NULL_CACHE"
 
+#: S26 — env knob pointing at a custom null-cache directory. Used by
+#: ``sway unpack`` to redirect lookups at a packed cache shipped in
+#: a ``.swaypack.tar.gz`` instead of the user's home cache. Path is
+#: used verbatim (no ``dlm-sway/null-stats`` suffix) so packs can
+#: ship a flat directory of ``<key>.json`` files.
+_ENV_OVERRIDE = "SWAY_NULL_CACHE_DIR"
+
 
 def _cache_root() -> Path:
-    """Root directory for cached null stats. Honors ``$XDG_CACHE_HOME``
-    when set; otherwise falls back to ``~/.dlm-sway/null-stats``."""
+    """Root directory for cached null stats.
+
+    Resolution order:
+
+    1. ``$SWAY_NULL_CACHE_DIR`` if set — used verbatim. ``sway unpack``
+       points this at the unpacked cache directory inside a swaypack
+       so subsequent ``sway run`` calls hit the packed stats instead
+       of the user's home cache (S26).
+    2. ``$XDG_CACHE_HOME/dlm-sway/null-stats`` if XDG is set.
+    3. ``~/.dlm-sway/null-stats`` otherwise.
+    """
+    override = os.environ.get(_ENV_OVERRIDE)
+    if override:
+        return Path(override).expanduser()
     xdg = os.environ.get("XDG_CACHE_HOME")
     if xdg:
         return Path(xdg).expanduser() / "dlm-sway" / "null-stats"
