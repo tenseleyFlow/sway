@@ -128,9 +128,10 @@ def unpack_swaypack(pack_path: Path, *, target_dir: Path) -> UnpackReport:
             f"manifest claims spec at {spec_path.name} but it's missing from the pack"
         )
 
-    null_stats_dir: Path | None = out_root / "null-stats"
-    if not null_stats_dir.exists() or not null_stats_dir.is_dir():
-        null_stats_dir = None
+    candidate_null_dir = out_root / "null-stats"
+    null_stats_dir: Path | None = (
+        candidate_null_dir if candidate_null_dir.is_dir() else None
+    )
 
     return UnpackReport(
         out_dir=out_root,
