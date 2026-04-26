@@ -129,9 +129,7 @@ def unpack_swaypack(pack_path: Path, *, target_dir: Path) -> UnpackReport:
         )
 
     candidate_null_dir = out_root / "null-stats"
-    null_stats_dir: Path | None = (
-        candidate_null_dir if candidate_null_dir.is_dir() else None
-    )
+    null_stats_dir: Path | None = candidate_null_dir if candidate_null_dir.is_dir() else None
 
     return UnpackReport(
         out_dir=out_root,
