@@ -1263,3 +1263,127 @@ def convert_adapter_cmd(
             fg=typer.colors.YELLOW,
             err=True,
         )
+
+
+# --- pack / unpack (S26, X3) ----------------------------------------------
+
+
+def pack_cmd(
+    spec_path: Annotated[Path, typer.Argument(help="Path to a sway.yaml to pack.")],
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Output tarball path. Defaults to <spec-stem>.swaypack.tar.gz next to spec.",
+        ),
+    ] = None,
+    include_golden: Annotated[
+        Path | None,
+        typer.Option(
+            "--include-golden",
+            help=(
+                "Path to a JSON sway-run report (from `sway run --json` or "
+                "`sway report --format json`) to bundle for verification."
+            ),
+        ),
+    ] = None,
+    include_null_cache: Annotated[
+        bool,
+        typer.Option(
+            "--include-null-cache/--no-include-null-cache",
+            help=(
+                "Bundle ~/.dlm-sway/null-stats/*.json into the pack so the "
+                "consumer doesn't need to re-calibrate. Default: include."
+            ),
+        ),
+    ] = True,
+    max_size_mb: Annotated[
+        int,
+        typer.Option(
+            "--max-size-mb",
+            help="Refuse to write a pack larger than this (default 50 MB).",
+        ),
+    ] = 50,
+) -> None:
+    """Bundle a spec + its inputs + null-stats cache into a portable swaypack tarball.
+
+    The result is a single ``.swaypack.tar.gz`` you can share with a
+    coworker or check into a release repo. The receiver runs
+    ``sway unpack <pack>`` and then ``sway run`` against the unpacked
+    spec — identical verdict to the original run, no live dlm or
+    network needed.
+    """
+    from dlm_sway.cli._pack import PackError, pack_spec
+
+    if out is None:
+        out = spec_path.with_suffix("").with_name(
+            f"{spec_path.with_suffix('').name}.swaypack.tar.gz"
+        )
+
+    try:
+        report = pack_spec(
+            spec_path,
+            out_path=out,
+            include_golden=include_golden,
+            include_null_cache=include_null_cache,
+            max_size_bytes=max_size_mb * 1024 * 1024,
+        )
+    except PackError as exc:
+        typer.secho(f"pack: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except SwayError as exc:
+        typer.secho(f"pack: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    size_kb = report.size_bytes / 1024
+    typer.echo(
+        f"wrote {report.out_path} ({size_kb:.1f} KB)  "
+        f"sections={report.section_bytes}b  "
+        f"null_stats={report.null_stats_count}  "
+        f"golden={'yes' if report.golden_included else 'no'}"
+    )
+
+
+def unpack_cmd(
+    pack_path: Annotated[Path, typer.Argument(help="Path to a *.swaypack.tar.gz.")],
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            "--out",
+            "-o",
+            help="Parent directory to extract into. Default: cwd.",
+        ),
+    ] = None,
+) -> None:
+    """Extract a swaypack into ``out``; print the next ``sway run`` invocation.
+
+    The pack lands at ``<out>/swaypack/`` containing ``sway.yaml`` plus
+    bundled artifacts. A ready-to-run command line is printed at the
+    end including the ``SWAY_NULL_CACHE_DIR=...`` env var that
+    redirects null-stats lookups at the bundled cache instead of the
+    user's home directory.
+    """
+    from dlm_sway.cli._unpack import UnpackError, unpack_swaypack
+
+    target_dir = out if out is not None else Path.cwd()
+    try:
+        report = unpack_swaypack(pack_path, target_dir=target_dir)
+    except UnpackError as exc:
+        typer.secho(f"unpack: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+    except SwayError as exc:
+        typer.secho(f"unpack: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"extracted: {report.out_dir}")
+    typer.echo(f"  spec_path: {report.spec_path}")
+    typer.echo(f"  null_stats: {report.null_stats_dir or '(none in pack)'}")
+    typer.echo(f"  swaypack_version: {report.manifest.get('swaypack_version')}")
+    typer.echo(f"  packed_at: {report.manifest.get('packed_at')}")
+    typer.echo("")
+    typer.echo("To run the bundled spec:")
+    if report.null_stats_dir is not None:
+        typer.echo(f"  SWAY_NULL_CACHE_DIR={report.null_stats_dir} sway run {report.spec_path}")
+    else:
+        typer.echo(f"  sway run {report.spec_path}")

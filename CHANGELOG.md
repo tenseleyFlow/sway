@@ -2,6 +2,68 @@
 
 ## Unreleased
 
+### Sprint 26 — X3 sway pack / unpack (sway-side half of the cross-repo X1+X3 pair)
+
+Closes the X3 half of Audit 03's "make a sway run reproducible by a
+coworker without recreating their environment" goal. The X1 half
+(`dlm export --to sway-json`) lands in the dlm repo via a separate
+PR; this changelog block ships the sway-only deliverable.
+
+**New CLI commands.**
+
+- **`sway pack <spec> [-o OUT] [--include-golden PATH]
+  [--include-null-cache/--no-include-null-cache] [--max-size-mb MB]`** —
+  bundles the spec + its `dlm_source` (when set) + cached null-stats
+  entries + an optional last-known-good JSON report into a single
+  `*.swaypack.tar.gz`. Default cap 50 MB; refuses to overwrite.
+- **`sway unpack <pack> [-o DIR]`** — extracts into `<DIR>/swaypack/`,
+  validates the manifest, and prints the ready-to-run `sway run`
+  invocation including the `SWAY_NULL_CACHE_DIR=...` env var that
+  redirects null-stats lookups at the bundled cache.
+
+**Pack format (`swaypack_version=1`).**
+
+```
+swaypack/
+  manifest.json    # version + counts + packed_at + sway_version
+  sway.yaml        # the spec, verbatim
+  source.dlm       # spec.dlm_source content (when present)
+  null-stats/      # one .json per cache key
+  golden.json      # known-good run report (when --include-golden)
+```
+
+Implementation modules:
+- **`cli/_pack.py`** — builds the tarball in-memory first so the
+  size cap can refuse cleanly *before* writing a half-built pack
+  to disk. Path-traversal-safe by construction (we author every
+  arcname).
+- **`cli/_unpack.py`** — uses `tarfile.extractall(filter='data')`
+  to reject absolute paths / `../` escapes / device files (3.11
+  compat). Validates `swaypack_version`; rejects mismatches with
+  a clear message.
+
+**Null-cache override env var.**
+
+- **`probes/_null_cache._cache_root`** now honors
+  `$SWAY_NULL_CACHE_DIR` if set (used verbatim — no
+  `dlm-sway/null-stats` suffix). Order: env override → XDG cache →
+  `~/.dlm-sway/null-stats`. The `sway unpack` CLI prints the exact
+  invocation that wires this env at the bundled cache.
+
+**Tests.**
+
+- **17 unit tests** in `tests/unit/test_pack_unpack.py`: round-trip
+  identity, manifest fields, dlm_source bundling (present + missing
+  + warning emit), golden bundling, every PackError + UnpackError
+  branch (overwrite refusal, size cap, missing file, corrupt
+  tarball, missing manifest, version mismatch, malformed root).
+- **2 slow+online integration tests** in
+  `tests/integration/test_pack_run_roundtrip.py`: pack → unpack →
+  `sway run` produces an identical band + per-probe verdict +
+  score; null-cache packing populates the unpack report's
+  `null_stats_dir` pointer.
+- 708 unit tests pass; mypy + ruff + format clean.
+
 ### Sprint 25 — P3 gradient_ghost probe (pre-run, cross-repo)
 
 New zero-forward-pass diagnostic probe that loads dlm's

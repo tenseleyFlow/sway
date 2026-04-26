@@ -331,6 +331,42 @@ sway run sway.yaml
 Per-section attribution tells you *which* parts of your document
 actually moved the model — a kind of signal no other tool provides.
 
+> Heads up — once dlm publishes its sister change, `dlm export --to
+> sway-json` writes a ready-to-run `sway.yaml` next to the GGUF.
+> Skip the manual `sway autogen` step entirely.
+
+## Reproducing a sway run
+
+Sometimes you want a coworker (or a future-you, or a bug report) to
+re-execute exactly what you ran without recreating your environment.
+`sway pack` bundles the spec + the source `.dlm` document + your
+locally-cached null-stats + (optionally) a known-good report into a
+single `*.swaypack.tar.gz` you can email or commit:
+
+```bash
+sway pack sway.yaml -o audit-2026-04.swaypack.tar.gz \
+  --include-golden last-run.json
+# wrote audit-2026-04.swaypack.tar.gz (4.2 KB)  sections=312b  null_stats=0  golden=yes
+
+# share the tarball with a coworker
+sway unpack audit-2026-04.swaypack.tar.gz
+# extracted: <cwd>/swaypack
+#   spec_path: <cwd>/swaypack/sway.yaml
+#   ...
+# To run the bundled spec:
+#   SWAY_NULL_CACHE_DIR=<cwd>/swaypack/null-stats sway run <cwd>/swaypack/sway.yaml
+```
+
+The packed null-stats cache means the consumer doesn't pay the
+re-calibration cost (~120 forward passes on a typical 10-probe
+suite). The unpack output prints the exact `SWAY_NULL_CACHE_DIR=...`
+env var to use; that env redirects null-stats lookups at the bundled
+cache instead of `~/.dlm-sway/`.
+
+A bundled golden JSON makes it trivial for the consumer to verify
+their re-run matches yours. Defaults to a 50 MB pack-size cap;
+override with `--max-size-mb`.
+
 ## Status
 
 Pre-alpha. API will break. Not yet on PyPI — install editable from source
