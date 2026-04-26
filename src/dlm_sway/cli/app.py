@@ -53,6 +53,8 @@ app.command("trace")(commands.trace_cmd)
 app.command("mine")(commands.mine_cmd)
 app.command("list-probes")(commands.list_probes_cmd)
 app.command("convert-adapter")(commands.convert_adapter_cmd)
+app.command("pack")(commands.pack_cmd)
+app.command("unpack")(commands.unpack_cmd)
 
 
 def main() -> None:
