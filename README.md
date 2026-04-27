@@ -308,6 +308,46 @@ the full walk-through including the `sway.yaml` template, the
 consumer-side `.pre-commit-config.yaml`, and the
 try-it-locally-before-you-install recipe.
 
+## GitHub Action
+
+For repos that don't use pre-commit, the
+[`tenseleyflow/sway-action`](https://github.com/tenseleyFlow/sway-action)
+GitHub Action wraps `sway gate` + a markdown report posted as a PR
+comment in three lines of YAML:
+
+```yaml
+- uses: tenseleyflow/sway-action@v0.1.0
+  with:
+    spec-path: sway.yaml
+```
+
+The action handles install, caching, gate execution, edit-in-place
+PR comments (so rebases don't spam), and exit-code translation. A
+complete workflow:
+
+```yaml
+name: sway
+on:
+  pull_request:
+    paths: ["**/*.dlm", "**/sway.yaml"]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  sway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: tenseleyflow/sway-action@v0.1.0
+        with:
+          spec-path: sway.yaml
+```
+
+Inputs include `fail-on` (`fail` / `warn` / `never`),
+`comment-on-pr`, `upload-artifact`, and `sway-version` for pinning.
+Outputs `sway-score`, `verdict`, and `report-path` are available to
+downstream steps. See the action repo's README for the full surface.
+
 ## The `.dlm` integration
 
 If you trained your adapter via the [DocumentLanguageModel
