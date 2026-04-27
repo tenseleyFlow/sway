@@ -1,0 +1,135 @@
+# Hand-authored tool-use cases used by integration + dlm-template tests.
+# Eight cases spanning the most common tool-call shapes; each schema is
+# small enough that a 135M-parameter base model can produce a valid call
+# with a one-shot system prompt. Update sparingly: the integration test
+# baseline depends on these prompts staying stable.
+cases:
+  - prompt: |
+      Use the search_web tool to find recent news about the James Webb telescope.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: search_web
+      description: Search the public web for a query string.
+      parameters:
+        type: object
+        properties:
+          query:
+            type: string
+          max_results:
+            type: integer
+        required: [query]
+    gold_tool_name: search_web
+
+  - prompt: |
+      Use the read_file tool to read /etc/hosts.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: read_file
+      description: Read the contents of a file from disk.
+      parameters:
+        type: object
+        properties:
+          path:
+            type: string
+          encoding:
+            type: string
+        required: [path]
+    gold_tool_name: read_file
+
+  - prompt: |
+      Use the run_python tool to compute factorial of 7.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: run_python
+      description: Execute a snippet of Python and return stdout.
+      parameters:
+        type: object
+        properties:
+          code:
+            type: string
+          timeout_s:
+            type: number
+        required: [code]
+    gold_tool_name: run_python
+
+  - prompt: |
+      Use the run_shell tool to list files in /tmp.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: run_shell
+      description: Run a shell command and return its output.
+      parameters:
+        type: object
+        properties:
+          command:
+            type: string
+          working_dir:
+            type: string
+        required: [command]
+    gold_tool_name: run_shell
+
+  - prompt: |
+      Use the http_fetch tool to GET https://example.com/health.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: http_fetch
+      description: Issue an HTTP GET against a URL.
+      parameters:
+        type: object
+        properties:
+          url:
+            type: string
+          headers:
+            type: object
+        required: [url]
+    gold_tool_name: http_fetch
+
+  - prompt: |
+      Use the db_query tool to SELECT name FROM users WHERE id = 5.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: db_query
+      description: Execute a read-only SQL query.
+      parameters:
+        type: object
+        properties:
+          sql:
+            type: string
+          params:
+            type: array
+        required: [sql]
+    gold_tool_name: db_query
+
+  - prompt: |
+      Use the calendar_create_event tool to add a meeting at 2pm tomorrow titled "Sync".
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: calendar_create_event
+      description: Create a new calendar event.
+      parameters:
+        type: object
+        properties:
+          title:
+            type: string
+          start_iso:
+            type: string
+          duration_minutes:
+            type: integer
+          attendees:
+            type: array
+        required: [title, start_iso]
+    gold_tool_name: calendar_create_event
+
+  - prompt: |
+      Use the calculator tool to compute 137 * 42.
+      Respond with only a JSON tool call.
+    tool_spec:
+      name: calculator
+      description: Evaluate a simple arithmetic expression.
+      parameters:
+        type: object
+        properties:
+          expression:
+            type: string
+        required: [expression]
+    gold_tool_name: calculator
