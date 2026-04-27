@@ -27,4 +27,5 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     prompt_collapse,
     section_internalization,
     style_fingerprint,
+    tool_use_fidelity,
 )

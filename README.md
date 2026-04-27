@@ -335,6 +335,54 @@ actually moved the model — a kind of signal no other tool provides.
 > sway-json` writes a ready-to-run `sway.yaml` next to the GGUF.
 > Skip the manual `sway autogen` step entirely.
 
+## Tool-use fidelity
+
+Adapters that target tool-calling behavior have a failure mode no
+other probe catches: they pass every adherence / attribution probe
+but silently degrade the base model's JSON-schema compliance, or
+start hallucinating tool names that aren't in the declared surface.
+The `tool_use_fidelity` probe scores three independent signals on
+each `(prompt, tool_spec)` case:
+
+- **JSON-schema validity delta** — `ft_valid_rate − base_valid_rate`.
+  A negative value means the adapter regressed on producing
+  schema-valid calls; the default pass criterion tolerates a 5pp
+  drop.
+- **Tool-name hallucination rate** — over schema-valid ft calls, the
+  fraction that pick a tool outside the declared `allowed_tools`
+  surface (or differ from `gold_tool_name` when no surface is set).
+  Default cap 10%.
+- **Argument-field disagreement rate** — over cases where both
+  views produce schema-valid calls, the per-leaf-field disagreement
+  rate between base and ft arguments. Surfaced as evidence — the
+  v1 surface doesn't gate on it.
+
+```yaml
+suite:
+  - name: tool_calls_intact
+    kind: tool_use_fidelity
+    cases:
+      - prompt: "Search the web for the capital of France."
+        tool_spec:
+          name: search_web
+          parameters:
+            type: object
+            properties: {query: {type: string}}
+            required: [query]
+        gold_tool_name: search_web
+    allowed_tools: [search_web, calculator, http_fetch]
+```
+
+The probe uses an OpenAI-style function-calling schema (the most
+common shape across hosted and OSS tool-use stacks). Other schema
+flavors (Anthropic, Llama-3.1, Gemini) land in a follow-up sprint;
+the v1 implementation deliberately ships the format that covers
+the largest user surface.
+
+`json_valid_rate_ft` is z-scored against the null-adapter baseline
+when `null_adapter` is in the suite — the principled "the adapter
+preserved the base's tool-call structure beyond noise" signal.
+
 ## Reproducing a sway run
 
 Sometimes you want a coworker (or a future-you, or a bug report) to

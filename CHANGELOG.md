@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### Sprint 27 — `tool_use_fidelity` probe
+
+Closes the P1 "tool_use_fidelity probe" backlog item. The probe sway
+ships for anyone fine-tuning an adapter against a tool-using base —
+the dominant fine-tune target outside dlm-style document training,
+and the failure mode no other shipped probe catches.
+
+**New probe (`kind: tool_use_fidelity`, category: attribution).**
+
+For each `(prompt, tool_spec, gold_tool_name)` case the probe greedy-
+decodes from base + ft and scores three independent signals:
+
+- **JSON-schema validity delta** (`ft_valid_rate − base_valid_rate`):
+  the gate that catches "ft broke the base's tool-call format". Default
+  pass criterion tolerates a 5pp drop.
+- **Tool-name hallucination rate**: fraction of schema-valid ft calls
+  whose `name` falls outside the declared `allowed_tools` surface (or
+  differs from `gold_tool_name` per-case when no surface is set).
+  Default cap 10%.
+- **Argument-field disagreement rate** (informational): leaf-field
+  drift between matched base/ft schema-valid calls. v1 surfaces it
+  as evidence rather than gating on it — the per-token KL on
+  free-form argument values is deferred past v1 because it requires
+  alignment between two decoded strings.
+
+The probe greedy-generates from both views, parses each output via a
+forgiving extractor (whole-text JSON → fenced ```json``` block →
+first balanced `{...}` substring), then validates against an
+OpenAI-flavored schema subset (`string`, `integer`, `number`,
+`boolean`, `object`, `array` plus `required`). No `jsonschema`
+dependency added — core sway dependencies stay lean.
+
+`json_valid_rate_ft` is z-scored against the null-adapter baseline
+when `null_adapter` is in the suite. Calibration spec ships two
+sentinel tool-use cases so the null distribution carries useful
+signal.
+
+**Implementation modules:**
+- **`probes/tool_use_fidelity.py`** — `ToolUseCase` /
+  `ToolUseFidelitySpec` / `ToolUseFidelityProbe` plus
+  `_parse_tool_call` / `_matches_schema` / `_field_disagreement`
+  helpers. 573 LOC.
+- **`probes/__init__.py`** — registers the new probe.
+
+**Test surface:**
+- **`tests/unit/test_probe_tool_use_fidelity.py`** — 40 unit tests
+  covering verdict logic (PASS / FAIL on validity / FAIL on
+  hallucination / SKIP-no-cases), the parse helpers (whole-text /
+  fenced / embedded / unbalanced / strings-with-braces), schema
+  validation (required / type-tag / bool-not-int / extras-allowed),
+  field disagreement (identical / drifted / nested / list-as-leaf /
+  None-vs-absent), and the calibration handoff.
+- **`tests/integration/test_probe_tool_use_fidelity.py`** —
+  slow+online HF backend smoke on a tiny SmolLM2-135M LoRA. Verifies
+  the full code path executes without error and emits every
+  documented evidence key with rates in `[0, 1]`. Doesn't assert a
+  specific verdict — the 135M base isn't tool-fluent enough to make
+  the validity gate meaningful, only the plumbing.
+- **`tests/fixtures/tool_use_cases.yaml`** — eight hand-authored
+  cases spanning the most common tool shapes (search, file I/O,
+  Python exec, shell, HTTP fetch, DB query, calendar, calculator).
+
+**README** gains a "Tool-use fidelity" section between the `.dlm`
+integration and "Reproducing a sway run" — pitches the probe as
+sway's signal for agentic fine-tunes, with a worked YAML example.
+
 ### Sprint 26 — X3 sway pack / unpack (sway-side half of the cross-repo X1+X3 pair)
 
 Closes the X3 half of Audit 03's "make a sway run reproducible by a
