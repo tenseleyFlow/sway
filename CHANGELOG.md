@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### Sprint 28 — `tenseleyflow/sway-action` GitHub Action
+
+Closes the P2 "GitHub Action" discoverability item from Audit 03
+D-path3. The action lives in its own repo
+([tenseleyFlow/sway-action](https://github.com/tenseleyFlow/sway-action),
+tagged `v0.1.0`) so consumers can pin via `uses:` without coupling
+to sway's release cadence.
+
+**End-user value:** three lines of YAML to wire sway into any GitHub
+PR check, with edit-in-place PR comments + cached venv + standardized
+verdict sticker. The audience is teams who don't use pre-commit but
+live in GitHub Actions.
+
+```yaml
+- uses: tenseleyflow/sway-action@v0.1.0
+  with:
+    spec-path: sway.yaml
+```
+
+**Inputs / outputs.** Inputs cover `fail-on` policy
+(`fail`/`warn`/`never`), `comment-on-pr`, `upload-artifact`,
+`sway-version` (defaults to the action's pinned version), and
+`python-version`. Outputs `sway-score`, `verdict`, and `report-path`
+are surfaced for downstream workflow steps.
+
+**Action layout:**
+- `action.yml` — composite action, 5 steps (setup-python → cache →
+  entrypoint.sh → upload-artifact → github-script post-comment).
+- `src/entrypoint.sh` — bootstraps a venv, installs `dlm-sway[hf]`
+  pinned, runs `sway gate` + `sway report --format md`, parses score
+  + verdict from the JSON report into `$GITHUB_OUTPUT`.
+- `src/post-comment.js` — Node 20 script run via
+  `actions/github-script@v7`. Finds prior sway comments via a hidden
+  `<!-- sway-action:report -->` HTML marker and edits in place.
+  Truncates at 60 KB with a footer pointing to the artifact for
+  full report.
+
+**Self-tests** (`smoke.yml` in the action repo): an `actionlint` +
+`shellcheck` + `node -c` lint job, an `entrypoint-stub` job that
+validates the bash plumbing against a stubbed `dlm_sway` package, and
+a `self-test` job that runs the action end-to-end against a tiny
+random LoRA on SmolLM2-135M (PR-only — needs PR context for the
+comment-posting step).
+
+**Sway README** gains a "GitHub Action" subsection between Pre-commit
+and the `.dlm` integration with the copy-paste one-liner + a complete
+workflow example.
+
 ### Sprint 27 — `tool_use_fidelity` probe
 
 Closes the P1 "tool_use_fidelity probe" backlog item. The probe sway
