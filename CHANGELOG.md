@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Sprint 36 — `sway serve` warm-backend daemon
+
+Audit 03 H4. `sway run` cold-loads the HF backend each invocation
+(~15s on a 1.5B model: weights, KV cache, deterministic-mode setup).
+For interactive flows — notebooks, the `sway watch` retrain loop,
+the live HTML report — that startup dwarfs the actual scoring
+cost. `sway serve` is a long-running FastAPI daemon that loads the
+backend once and keeps it warm across requests.
+
+**New CLI (`sway serve`).** Defaults: `--host 127.0.0.1 --port 8787
+--max-loaded-models 2`. The daemon refuses to bind a non-loopback
+interface unless `--api-key <token>` is passed; every non-`/health`
+request must then carry `Authorization: Bearer <token>`.
+
+**Endpoints.**
+
+- `GET /health` — uptime + the list of currently-warm models.
+- `GET /stats` — request count + mean latency + cache size.
+- `POST /run` — body `{spec: SwaySpec}`; returns the same JSON
+  shape `sway run --json-out` would write, plus `request_seconds`
+  for the daemon's measured execution time.
+- `POST /score` — same as `/run` with an optional `probe_names`
+  filter; returns just the per-probe entries with no folded
+  `SwayScore`.
+
+**Backend cache.** LRU keyed on `(kind, base, adapter, dtype,
+device)`. Capped at `--max-loaded-models`; loading a third distinct
+model LRU-evicts the oldest, calling `backend.close()` to release
+GPU memory. Single-flight: concurrent requests for the same key
+serialize at the loader instead of building twice.
+
+**Python SDK.** `dlm_sway.serve.client.ServeClient(url)` exposes
+`health()`, `stats()`, `run(spec)`, `score(spec, probe_names=...)`.
+Stateless (no persistent connection pool); raises
+`ServeClientError` (subclass of `SwayError`) on transport failure
+or non-2xx responses.
+
+**Auth posture (v1).** Defaults to no auth on loopback — the
+threat model on a single-user dev box is "did I bind 0.0.0.0 by
+accident". The CLI hard-refuses `--host 0.0.0.0` without an API
+key. Full OAuth is deferred.
+
 ### Sprint 33 — `training_drift` probe (cross-repo, reads dlm loss curves)
 
 Closes the X2 "training_drift probe" backlog item. Sister to S25
