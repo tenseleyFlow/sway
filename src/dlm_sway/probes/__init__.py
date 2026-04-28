@@ -21,6 +21,7 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     external_perplexity,
     gradient_ghost,
     leakage,
+    multi_turn_coherence,
     null_adapter,
     paraphrase_invariance,
     preference_flip,
