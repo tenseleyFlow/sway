@@ -29,4 +29,5 @@ from dlm_sway.probes import (  # noqa: F401 — imports register the probes
     section_internalization,
     style_fingerprint,
     tool_use_fidelity,
+    training_drift,
 )
