@@ -89,6 +89,8 @@ def create_app(
     a TestClient.
     """
     try:
+        from contextlib import asynccontextmanager
+
         from fastapi import FastAPI, HTTPException, Request, status
         from fastapi.responses import JSONResponse
     except ImportError as exc:
@@ -102,6 +104,18 @@ def create_app(
     request_count = 0
     total_run_seconds = 0.0
 
+    # Capture cache in the lifespan closure so the shutdown leg runs
+    # ``evict_all`` (the on_event API is deprecated in FastAPI 0.110+).
+    _cache_for_lifespan = cache
+
+    @asynccontextmanager
+    async def _lifespan(app: Any) -> Any:
+        del app
+        try:
+            yield
+        finally:
+            _cache_for_lifespan.evict_all()
+
     app = FastAPI(
         title="sway",
         version=__version__,
@@ -109,6 +123,7 @@ def create_app(
             "Warm-backend HTTP API for sway. POST /run accepts a spec; "
             "the daemon keeps backends loaded between calls."
         ),
+        lifespan=_lifespan,
     )
 
     # -- auth middleware --------------------------------------------------
@@ -264,12 +279,6 @@ def create_app(
             "probes": bundled["probes"],
             "request_seconds": elapsed,
         }
-
-    # -- shutdown --------------------------------------------------------
-
-    @app.on_event("shutdown")
-    async def _on_shutdown() -> None:
-        cache.evict_all()
 
     # Stash the cache + counters on the app so tests can introspect.
     app.state.sway_cache = cache
