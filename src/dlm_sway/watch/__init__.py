@@ -14,6 +14,7 @@ The CLI is :func:`dlm_sway.cli.commands.watch_cmd`.
 from __future__ import annotations
 
 from dlm_sway.watch.core import (
+    RunnerFn,
     RunOutcome,
     RunResult,
     Watcher,
@@ -23,6 +24,7 @@ from dlm_sway.watch.core import (
 )
 
 __all__ = [
+    "RunnerFn",
     "RunOutcome",
     "RunResult",
     "Watcher",
