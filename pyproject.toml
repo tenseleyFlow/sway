@@ -101,6 +101,14 @@ serve = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
 ]
+# Filesystem-watch mode (S34). watchdog observes the dlm adapter
+# pointer file (``<store>/adapter/current.txt``) and re-runs the
+# spec on every change. Lightweight pure-Python (~50 KB) — kept
+# behind an extra anyway so users who only need ``sway run`` don't
+# pay for it.
+watch = [
+    "watchdog>=4.0",
+]
 # Visualization (P9 + S12 HTML report).
 viz = [
     "matplotlib>=3.8",
@@ -125,6 +133,7 @@ all = [
     "plotly>=5.20",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.30",
+    "watchdog>=4.0",
 ]
 
 [project.scripts]
@@ -268,6 +277,8 @@ module = [
     "httpx.*",
     "huggingface_hub.*",
     "dlm.*",
+    "watchdog",
+    "watchdog.*",
 ]
 ignore_missing_imports = true
 disable_error_code = ["no-untyped-call"]
