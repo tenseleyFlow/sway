@@ -515,6 +515,64 @@ LRU-evicts the oldest, calling `backend.close()` to release the
 weights. `GET /health` reports the currently-warm models;
 `GET /stats` reports request count and mean latency.
 
+## Watch mode
+
+`sway watch <spec>` re-runs your suite on every dlm adapter version
+bump. dlm's `dlm train --watch` writes a new adapter version on every
+save; sway picks it up via the canonical `<store>/adapter/current.txt`
+pointer (or the legacy `latest` symlink), re-runs the suite, prints
+the verdict, and writes a JSON to `--history-dir` (default
+`./sway-history/`).
+
+```bash
+pip install 'dlm-sway[watch,dlm]'   # adds watchdog + the dlm bridge
+```
+
+Two-terminal recipe — the killer dev loop:
+
+```bash
+# Terminal 1 — dlm retrains on every save.
+dlm train mydoc.dlm --watch
+
+# Terminal 2 — sway re-gates on every retrain. Spec must reference
+# the .dlm via `dlm_source:` so sway knows which store to watch.
+sway watch myspec.yaml
+```
+
+Output (one line per fire):
+
+```
+#001 pass  3.2s overall=0.84  →  ./sway-history/20260428T184201Z-00001.result.json
+#002 fail  3.0s overall=0.42  →  ./sway-history/20260428T184231Z-00002.result.json
+```
+
+Pair with `sway serve` for a 5-10× speedup — the daemon keeps the
+backend warm across watch fires, dropping per-fire latency from ~15s
+cold to ~2s warm:
+
+```bash
+# Terminal 1
+sway serve --port 8787
+
+# Terminal 2 — same dlm train --watch as before
+
+# Terminal 3
+SWAY_SERVE_URL=http://localhost:8787 sway watch myspec.yaml
+```
+
+Other flags worth knowing:
+
+- `--max-history N` (default 100) — caps retained history JSONs.
+- `--on-fail '<cmd>'` — spawns a shell command on each fail. The
+  child sees `SWAY_RESULT_PATH` in its environment pointing at the
+  JSON. Drop a Slack ping or local-notification hook here.
+- `--format json` — emit the per-fire summary as one JSON object per
+  line on stdout, easier to pipe to `jq` or feed into a dashboard.
+
+If the spec file itself changes mid-watch (you edited probes), sway
+notices the mtime change, reloads it, and prints a `(spec reloaded)`
+note next to that fire.
+
 ## Reproducing a sway run
 
 Sometimes you want a coworker (or a future-you, or a bug report) to
