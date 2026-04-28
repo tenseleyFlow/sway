@@ -2,6 +2,94 @@
 
 ## Unreleased
 
+### Sprint 33 — `training_drift` probe (cross-repo, reads dlm loss curves)
+
+Closes the X2 "training_drift probe" backlog item. Sister to S25
+`gradient_ghost`: where the ghost reads optimizer state at
+end-of-training, `training_drift` reads the loss *curve* during
+training. Both are pre-run, no model load, no backend required.
+
+**New probe (`kind: training_drift`, category: calibration).**
+
+For a dlm store, the probe parses every `train-*.jsonl` under
+`<store_path>/logs/`, dedupes resumed runs (latest occurrence wins),
+and computes four metrics:
+
+- `final_loss` — last recorded step's loss.
+- `convergence_ratio` — `final_loss / initial_loss`.
+- `smoothness` — `1 − var(Δloss) / var(loss)`, clipped to `[0, 1]`.
+- `instability_events` — count of loss-*increase* events whose
+  magnitude exceeds the local typical movement scale (median
+  absolute delta in a centered window). NaN losses count as one
+  instability each, then forward-fill so downstream stats stay
+  finite.
+
+Verdict PASS when all three thresholds clear (smoothness ≥ 0.7,
+convergence_ratio ≤ 0.7, instability_events ≤ 0). Otherwise WARN
+with each failed threshold listed in the message.
+
+**Spike heuristic note.** Sprint plan called for `|Δloss| > 3 ·
+rolling_std`. Implementation rejects that: on a smooth exponential
+decay, within-window std-of-deltas stays tiny while absolute deltas
+are large — every step trips the threshold (verified during dev:
+60-step smooth curve flagged 59 false-positive spikes). Replaced
+with: count *positive* deltas (loss going up — the semantically
+meaningful instability) that exceed `sigma · median(|Δ|)` in a
+centered window. Robust to scale changes across training; loss
+going down faster than usual is no longer mistaken for instability.
+
+**No null calibration.** Mirrors `prompt_collapse` and
+`multi_turn_coherence_decay`: a null adapter has no loss curve,
+the null distribution of "smoothness on a noise adapter" is
+undefined. Fixed-threshold verdicts; users override per-spec.
+
+**Log-format note.** Sprint plan said dlm writes per-step JSONs at
+`logs/train_step_*.json`. Reality (verified against
+`~/.dlm/store/`): one mixed JSONL per run at
+`logs/train-NNNNNN-YYYYMMDDTHHMMSS.jsonl` containing banner +
+delta + step + run_complete records. The probe filters for
+`{"type": "step"}` lines and reads `step` + `loss`. Sibling
+`*.summary.json` carries run aggregates we don't consume — the
+curve is richer.
+
+**Robustness:**
+- Resumed runs (overlapping step numbers across multiple jsonls):
+  dedupe-by-keep-latest mirrors `dlm metrics` semantics.
+- Truncated JSONL tail (crashed-mid-line trainer): partial line
+  is skipped; valid lines still consumed.
+- NaN losses are recorded as `+inf` so the spike detector flags
+  them without numpy NaN poisoning the rest of the pipeline.
+- 1500-step run downsamples to ≤ 512 evidence points (uniform
+  stride; first + last always preserved).
+- Pathological: every step recorded NaN → `smoothness = 0.0`,
+  `instability_events = num_steps`, verdict WARN.
+
+**Implementation:**
+- `probes/training_drift.py` — spec, probe, JSONL parser,
+  metric helpers, verdict mapping, downsampler. 365 LOC.
+- `probes/__init__.py` — registers the new probe.
+
+**Test surface:**
+- `tests/unit/test_probe_training_drift.py` — 30 unit tests
+  covering: skip paths (no store_path / no logs dir / no jsonl /
+  too few steps), end-to-end with smooth & spiky curves,
+  resume-deduplication, downsampling, corrupt-first-line ERROR,
+  truncated-tail tolerance, pure-math metric helpers
+  (smooth/constant/NaN/all-NaN/zero-initial), spike-detector
+  heuristic (loss-up vs loss-down semantics, short curves,
+  empty), downsampling, verdict mapping, and JSONL parsing
+  (filter non-step records, missing keys, NaN encoding,
+  missing files).
+- `tests/fixtures/dlm_train_log_fixture.jsonl` — captured-from-disk
+  shape: banner + delta record + 30 step records + run_complete.
+  If this fixture's parse breaks, dlm's log format has shifted and
+  the probe needs an update — the test catches that explicitly.
+
+**README** gains a `training_drift` paragraph in "Pre-run
+diagnostics" alongside `gradient_ghost`. The probe table at "Why
+it exists" picks up `training_drift` and the previously-missed
+`gradient_ghost` entry under Calibration.
+
 ### Sprint 30 — `multi_turn_coherence_decay` probe
 
 Closes the P2 "multi_turn_coherence_decay probe" backlog item. Sway

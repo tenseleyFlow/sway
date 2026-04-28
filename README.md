@@ -124,6 +124,22 @@ spec doesn't load a model, doesn't allocate GPU memory, doesn't pay
 the cold-start tax. Useful for `pre-commit` gates that should fast-
 path adapter sanity before authorizing the full battery.
 
+The **`training_drift`** probe pairs with `gradient_ghost`: where the
+ghost reads optimizer state at end-of-training, drift reads the loss
+*curve* during training (from dlm's per-step JSONL logs):
+
+```
+⚠️  training_drift flagged unstable training
+    smoothness=0.42, convergence_ratio=0.91, instability_events=4
+```
+
+Four metrics: `final_loss`, `convergence_ratio`, `smoothness`
+(1 − var(Δloss)/var(loss)), and `instability_events` (loss-increase
+spikes that exceed local typical movement). Verdict PASS when all
+three of (smoothness ≥ 0.7, instability_events == 0,
+convergence_ratio ≤ 0.7); else WARN. Like `gradient_ghost`, runs in
+~10 ms with no model load.
+
 ## Full suite
 
 ```yaml
@@ -169,14 +185,14 @@ user-authored document. The right question is *"did the adapter actually
 move the model toward what I wrote?"* — and existing tools answer this
 poorly.
 
-`sway` answers it directly via fourteen primitives across four
+`sway` answers it directly via fifteen primitives across four
 categories, plus a baseline-calibration primitive:
 
 | Category      | Primitives                                            |
 |---------------|-------------------------------------------------------|
 | Adherence     | `delta_kl`, `adapter_revert`, `prompt_collapse`, `cluster_kl`, `multi_turn_coherence_decay` |
 | Attribution   | `section_internalization`, `paraphrase_invariance`, `preference_flip`, `tool_use_fidelity` |
-| Calibration   | `style_fingerprint`, `calibration_drift`, `leakage`, `external_perplexity` |
+| Calibration   | `style_fingerprint`, `calibration_drift`, `leakage`, `external_perplexity`, `gradient_ghost`, `training_drift` |
 | Ablation      | `adapter_ablation` ← the signature primitive          |
 | Baseline      | `null_adapter` (powers every z-score in the report)   |
 
