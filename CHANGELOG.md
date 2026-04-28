@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Sprint 34 — `sway watch` (dlm `--watch` integration)
+
+Audit 03 X4. dlm's `dlm train --watch` writes a new adapter version
+on every save; previously closing the loop ("did the new adapter
+help?") meant manually rerunning `sway run` on every retrain. This
+sprint ships `sway watch <spec>`, which tails the dlm adapter
+pointer and re-runs the suite automatically.
+
+**New CLI (`sway watch`).** Watches `<store>/adapter/current.txt`
+(or the legacy `<store>/adapter/latest` symlink). On every change:
+re-resolves the dlm handle, re-runs the spec, prints a one-line
+verdict, writes the result JSON to `--history-dir`. Stops cleanly
+on Ctrl-C and reports the total fire count. Flags: `--history-dir`
+(default `./sway-history`), `--max-history N` (default 100),
+`--on-fail '<cmd>'`, `--serve-url URL` (or `SWAY_SERVE_URL`),
+`--api-key TOKEN` (or `SWAY_API_KEY`), `--format text|json`.
+
+**Serve delegation.** When `--serve-url` (or `$SWAY_SERVE_URL`) is
+set, the watcher delegates each fire to a `sway serve` daemon over
+HTTP instead of building a local backend. Drops per-fire latency
+from ~15s cold-load to ~2s warm dispatch — the killer dev loop is
+"`dlm train --watch` + `sway serve` + `sway watch`" running in
+three terminals.
+
+**Half-write retry.** dlm writes the pointer atomically, but
+watchdog can fire mid-rename. The watcher retries pointer reads up
+to `retry_attempts` (default 3) with a 200 ms backoff before
+declaring failure — handles the rare race without spamming
+errors.
+
+**Spec-edit reload.** If you edit your sway YAML mid-session
+(probes, weights, etc.), the watcher notices the mtime change, re-
+loads the spec on the next fire, and tags the outcome with
+`spec_reloaded: true` so the per-fire line shows `(spec reloaded)`.
+
+**On-fail hooks.** `--on-fail '<cmd>'` runs a shell command on
+every fail verdict, with `SWAY_RESULT_PATH` in the child's env
+pointing at the JSON. Drop a Slack ping, desktop notification, or
+git revert hook here.
+
+**History rotation.** Each fire writes
+`<history-dir>/<ts>-<seq>.result.json`. Older entries beyond
+`--max-history` are pruned (`0` disables). The S29 live HTML report
+sprint will tail this directory directly.
+
+**New extra.** `pip install 'dlm-sway[watch]'` pulls watchdog (a
+~50 KB pure-Python dep). Combined with `[dlm]` for the .dlm
+resolution: `pip install 'dlm-sway[watch,dlm]'`.
+
 ### Sprint 36 — `sway serve` warm-backend daemon
 
 Audit 03 H4. `sway run` cold-loads the HF backend each invocation

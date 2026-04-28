@@ -1479,3 +1479,360 @@ def serve_cmd(
     import uvicorn as _uvicorn
 
     _uvicorn.run(app, host=host, port=port, log_level=log_level)
+
+
+# --- watch (S34) ---------------------------------------------------------
+
+
+class WatchFormat(StrEnum):
+    """``sway watch --format`` output style for the per-fire summary."""
+
+    TEXT = "text"
+    JSON = "json"
+
+
+def watch_cmd(
+    spec: Annotated[Path, typer.Argument(help="Path to a sway.yaml spec.")],
+    history_dir: Annotated[
+        Path,
+        typer.Option(
+            "--history-dir",
+            help=(
+                "Where per-fire result JSONs are written. Created on "
+                "first run if missing. The S29 live HTML report tails "
+                "this directory."
+            ),
+        ),
+    ] = Path("./sway-history"),
+    max_history: Annotated[
+        int,
+        typer.Option(
+            "--max-history",
+            help=(
+                "Cap on retained history JSONs. Older files are pruned "
+                "after each run. ``0`` disables rotation."
+            ),
+        ),
+    ] = 100,
+    on_fail: Annotated[
+        str | None,
+        typer.Option(
+            "--on-fail",
+            help=(
+                "Shell command to spawn when the verdict is fail. "
+                "``SWAY_RESULT_PATH`` is set in the child's env to the "
+                "JSON path. Fire-and-forget; we don't wait."
+            ),
+        ),
+    ] = None,
+    serve_url: Annotated[
+        str | None,
+        typer.Option(
+            "--serve-url",
+            envvar="SWAY_SERVE_URL",
+            help=(
+                "Delegate every run to a sway serve daemon (S36) over "
+                "HTTP. Defaults to the SWAY_SERVE_URL env var. The "
+                "daemon keeps the backend warm — turning a 15s cold "
+                "load into a 2s warm dispatch on every retrain."
+            ),
+        ),
+    ] = None,
+    api_key: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key",
+            envvar="SWAY_API_KEY",
+            help=(
+                "Bearer token for the serve daemon, if it was launched "
+                "with one. Defaults to SWAY_API_KEY env var."
+            ),
+        ),
+    ] = None,
+    fmt: Annotated[
+        WatchFormat,
+        typer.Option(
+            "--format",
+            help="Per-fire stdout summary format.",
+        ),
+    ] = WatchFormat.TEXT,
+) -> None:
+    """Re-run a spec on every dlm adapter version (S34).
+
+    Watches the dlm adapter pointer for the .dlm file referenced by
+    ``spec.dlm_source``. On every change, re-runs the spec, prints
+    a verdict, writes a result JSON to ``--history-dir``. Stops
+    cleanly on Ctrl-C.
+
+    Two-terminal recipe::
+
+        # Terminal 1 — dlm trains on every save.
+        dlm train mydoc.dlm --watch
+
+        # Terminal 2 — sway re-gates on every retrain.
+        sway watch myspec.yaml
+
+    Pair with ``sway serve`` for a 5-10× speedup on the loop:
+    set ``SWAY_SERVE_URL=http://localhost:8787`` before the watch
+    command.
+    """
+    if max_history < 0:
+        typer.secho("--max-history must be >= 0", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        from dlm_sway.suite.loader import load_spec
+    except SwayError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    try:
+        spec_obj = load_spec(spec)
+    except SwayError as exc:
+        typer.secho(f"error loading spec: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    if spec_obj.dlm_source is None:
+        typer.secho(
+            "error: spec has no dlm_source — sway watch needs a .dlm-backed spec "
+            "so it can find the adapter pointer to watch.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        store_root, dlm_id = _resolve_store_for_dlm(Path(spec_obj.dlm_source))
+    except SwayError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    from dlm_sway.watch.core import (
+        Watcher,
+        WatcherConfig,
+        resolve_pointer_path,
+        start_observing,
+    )
+
+    pointer_path = resolve_pointer_path(store_root)
+    adapter_dir = store_root / "adapter"
+    if pointer_path is None:
+        if not adapter_dir.exists():
+            typer.secho(
+                f"error: store has no adapter dir yet ({adapter_dir}) — "
+                "run dlm train at least once before sway watch.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        # Adapter dir exists but pointer doesn't — dlm might still
+        # be writing the first version. Default to current.txt; the
+        # observer will pick it up the moment dlm creates it.
+        pointer_path = adapter_dir / "current.txt"
+
+    runner = _build_watch_runner(serve_url=serve_url, api_key=api_key)
+
+    config = WatcherConfig(
+        spec_path=spec.resolve(),
+        history_dir=history_dir.resolve(),
+        max_history=max_history,
+        on_fail_cmd=on_fail,
+        serve_url=serve_url,
+    )
+
+    console = Console()
+    _print_watch_banner(console, spec, dlm_id, pointer_path, config, serve_url)
+
+    def _on_outcome(outcome: Any) -> None:
+        _emit_watch_outcome(outcome, fmt=fmt, console=console)
+
+    watcher = Watcher(
+        config,
+        pointer_path=pointer_path,
+        runner=runner,
+        on_outcome=_on_outcome,
+    )
+
+    # If the pointer already exists at startup, fire one baseline run
+    # so the user gets a verdict without waiting for the next retrain.
+    try:
+        if pointer_path.exists():
+            watcher.trigger_once(force=True)
+    except SwayError as exc:
+        # Don't bail — the observer might still see a successful pointer
+        # write later. Just log.
+        console.print(f"[yellow]initial fire failed:[/yellow] {exc}")
+
+    try:
+        observed = start_observing(watcher)
+    except SwayError as exc:
+        typer.secho(f"error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+
+    console.print("[dim]watching — Ctrl-C to stop[/dim]")
+    try:
+        # Block forever; KeyboardInterrupt drops us into the finally.
+        # Sleep in 1s ticks so SIGINT is responsive on every platform.
+        while True:
+            import time
+
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        console.print("\n[dim]stopping…[/dim]")
+    finally:
+        observed.stop()
+        console.print(f"[green]ran {watcher.sequence} suite(s) over this watch session[/green]")
+
+
+def _resolve_store_for_dlm(dlm_path: Path) -> tuple[Path, str]:
+    """Return (store_root, dlm_id) for a .dlm path. Raises SwayError on miss."""
+    if not dlm_path.exists():
+        raise SwayError(f"dlm_source not found: {dlm_path}")
+    try:
+        from dlm_sway.integrations.dlm import resolver as _dlm_resolver
+    except ImportError as exc:
+        raise SwayError(
+            "sway watch needs the [dlm] extra to resolve the adapter store path. "
+            "Install with: pip install 'dlm-sway[dlm]'"
+        ) from exc
+    try:
+        handle = _dlm_resolver.resolve_dlm(dlm_path)
+    except Exception as exc:  # noqa: BLE001 — bubble up as SwayError
+        raise SwayError(f"failed to resolve {dlm_path}: {exc}") from exc
+
+    import os as _os
+
+    home = Path(_os.environ.get("DLM_HOME", "~/.dlm")).expanduser()
+    store_root = home / "store" / handle.dlm_id
+    return store_root, handle.dlm_id
+
+
+def _build_watch_runner(*, serve_url: str | None, api_key: str | None) -> Any:
+    """Build the runner closure passed to :class:`Watcher`."""
+    if serve_url is not None:
+        return _build_serve_runner(serve_url=serve_url, api_key=api_key)
+    return _build_local_runner()
+
+
+def _build_local_runner() -> Any:
+    """Default runner: build a backend, run, fold scores. Reuses _execute_spec."""
+    from dlm_sway.suite import report
+
+    def _run(
+        spec_path: Path,
+        spec_obj: Any,  # noqa: ARG001 — _execute_spec re-loads from path; signature kept for symmetry
+        adapter_pointer: str,  # noqa: ARG001 — pointer is for the daemon path; local path picks it up via resolve_dlm
+        serve_url: str | None,  # noqa: ARG001
+    ) -> Any:
+        import time as _time
+
+        from dlm_sway.watch.core import RunResult
+
+        started = _time.monotonic()
+        result, score_obj = _execute_spec(spec_path)
+        seconds = _time.monotonic() - started
+        json_payload = report.to_json(result, score_obj)
+
+        verdict = "fail" if any(p.verdict == Verdict.FAIL for p in result.probes) else "pass"
+        threshold = spec_obj.defaults.coverage_threshold if hasattr(spec_obj, "defaults") else 0.0
+        if score_obj.overall < threshold:
+            verdict = "fail"
+
+        return RunResult(
+            verdict=verdict,
+            json_payload=json_payload,
+            run_seconds=seconds,
+            overall_score=float(score_obj.overall),
+        )
+
+    return _run
+
+
+def _build_serve_runner(*, serve_url: str, api_key: str | None) -> Any:
+    """Runner that delegates to a ``sway serve`` daemon over HTTP."""
+
+    def _run(
+        spec_path: Path,
+        spec_obj: Any,
+        adapter_pointer: str,  # noqa: ARG001 — daemon does its own resolution
+        _serve_url: str | None,  # noqa: ARG001 — captured in closure
+    ) -> Any:
+        import time as _time
+
+        from dlm_sway.serve.client import ServeClient
+        from dlm_sway.watch.core import RunResult
+
+        client = ServeClient(serve_url, api_key=api_key)
+        started = _time.monotonic()
+        payload = client.run(spec_obj, spec_path=str(spec_path))
+        seconds = _time.monotonic() - started
+
+        # Daemon returns the same shape as ``sway run --json``.
+        score_block = payload.get("score") or {}
+        overall = score_block.get("overall")
+        verdict = _verdict_from_payload(payload, spec_obj)
+        return RunResult(
+            verdict=verdict,
+            json_payload=json.dumps(payload, indent=2, sort_keys=True),
+            run_seconds=seconds,
+            overall_score=float(overall) if overall is not None else None,
+        )
+
+    return _run
+
+
+def _verdict_from_payload(payload: dict[str, Any], spec_obj: Any) -> str:
+    """Derive a gate-style verdict from a serve-daemon JSON response."""
+    probes = payload.get("probes") or []
+    has_fail = any(p.get("verdict") == "fail" for p in probes)
+    threshold = spec_obj.defaults.coverage_threshold if hasattr(spec_obj, "defaults") else 0.0
+    score_block = payload.get("score") or {}
+    overall = score_block.get("overall")
+    if has_fail or (overall is not None and overall < threshold):
+        return "fail"
+    return "pass"
+
+
+def _print_watch_banner(
+    console: Console,
+    spec_path: Path,
+    dlm_id: str,
+    pointer_path: Path,
+    config: Any,
+    serve_url: str | None,
+) -> None:
+    console.print(f"[bold]sway watch[/bold] {__version__}")
+    console.print(f"  spec        [cyan]{spec_path}[/cyan]")
+    console.print(f"  dlm_id      [cyan]{dlm_id}[/cyan]")
+    console.print(f"  pointer     [cyan]{pointer_path}[/cyan]")
+    console.print(f"  history-dir [cyan]{config.history_dir}[/cyan]")
+    if serve_url:
+        console.print(f"  via serve   [cyan]{serve_url}[/cyan]")
+    if config.on_fail_cmd:
+        console.print(f"  on-fail     [yellow]{config.on_fail_cmd}[/yellow]")
+
+
+def _emit_watch_outcome(outcome: Any, *, fmt: WatchFormat, console: Console) -> None:
+    if fmt is WatchFormat.JSON:
+        # Echo the result JSON straight to stdout; pipes-to-jq friendly.
+        console.print_json(
+            data={
+                "sequence": outcome.sequence,
+                "result_path": str(outcome.result_path),
+                "verdict": outcome.verdict,
+                "run_seconds": outcome.run_seconds,
+                "overall_score": outcome.overall_score,
+                "spec_reloaded": outcome.spec_reloaded,
+                "adapter_pointer": outcome.adapter_pointer,
+            }
+        )
+        return
+    style = {"pass": "green", "fail": "red", "error": "yellow"}.get(outcome.verdict, "white")
+    score_text = (
+        f" overall={outcome.overall_score:.2f}" if outcome.overall_score is not None else ""
+    )
+    reload_note = " [dim](spec reloaded)[/dim]" if outcome.spec_reloaded else ""
+    console.print(
+        f"[{style}]#{outcome.sequence:03d} {outcome.verdict}[/{style}]"
+        f"  {outcome.run_seconds:.1f}s{score_text}  →  {outcome.result_path}{reload_note}"
+    )
