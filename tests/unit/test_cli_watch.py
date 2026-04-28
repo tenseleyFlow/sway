@@ -7,6 +7,7 @@ End-to-end watching is exercised by tests/unit/test_watch_observer.py
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,18 @@ pytest.importorskip("watchdog")
 from typer.testing import CliRunner  # noqa: E402
 
 from dlm_sway.cli.app import app  # noqa: E402
+
+# typer/rich styles flag names with per-segment ANSI escapes — the
+# rendered ``--history-dir`` is actually four runs (``-``, ``-history``,
+# ``-dir``, …) with escapes between them, so a naive substring check
+# misses on CI runners that have a different default style. Strip
+# escapes before asserting.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _plain(s: str) -> str:
+    return _ANSI_RE.sub("", s)
+
 
 SPEC_WITH_DLM_SOURCE = """\
 version: 1
@@ -62,7 +75,7 @@ def test_watch_in_help() -> None:
 def test_watch_help_lists_required_flags() -> None:
     result = CliRunner().invoke(app, ["watch", "--help"])
     assert result.exit_code == 0
-    out = result.stdout
+    out = _plain(result.stdout)
     assert "--history-dir" in out
     assert "--max-history" in out
     assert "--on-fail" in out
