@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+### Sprint 30 — `multi_turn_coherence_decay` probe
+
+Closes the P2 "multi_turn_coherence_decay probe" backlog item. Sway
+had zero coverage of multi-turn behavior before this — every
+shipped adherence probe was single-turn. Adapters that pass
+`delta_kl` cleanly frequently degrade by turn 2 or 3 of real
+dialogue, where the model's own previous responses enter the
+context window and create compounding drift. The new probe is the
+first that catches that failure mode.
+
+**New probe (`kind: multi_turn_coherence_decay`, category: adherence).**
+
+For each prompt the probe greedy-generates ft's turn-1 response,
+then rolls a multi-turn synthetic dialogue with cycled generic
+follow-ups (`Continue.`, `Tell me more.`, …). At each turn 2..N
+both views see the same ft-grounded chat history; the probe
+computes `KL(base || ft)` at the next-token position. The
+per-turn KL series is fit to `kl = a · exp(-b · turn)` and
+the probe reports `half_life_turns = ln(2) / b`.
+
+Verdict ladder:
+- `ok` — clean exponential decay; PASS when `half_life_turns ≥
+  assert_half_life_turns` (default 2.0).
+- `stable` — KL stayed within 0.1% relative spread across turns;
+  half-life is formally infinite; clipped to `max_turns × 10`
+  and rendered with a "held coherence" message; always PASS.
+- `non_monotonic` — KL grew turn-over-turn (atypical but
+  possible); WARN with the curve in evidence.
+- `degenerate` — KL ≈ 0 at every turn; FAIL with "probable no-op
+  adapter" diagnosis.
+
+**No null calibration.** Mirrors `prompt_collapse`'s rationale: a
+null adapter has no signal to decay, so the null distribution of
+half-lives is meaningless. Fixed-threshold verdicts are the
+published path.
+
+**Chat-template requirement.** Multi-turn dialogue requires the
+base's tokenizer to carry a `chat_template`. Bases without one
+SKIP gracefully with a clear message. The probe consults
+`ctx.backend._tokenizer.chat_template` — same backdoor
+`prompt_collapse` uses for the same reason (avoids broadening the
+public scoring contract for one probe's needs).
+
+Reports surface a tiny unicode sparkline of per-turn KL in the
+verdict message so terminal-only readers see curve shape without
+opening the JSON.
+
+**Implementation:**
+- `probes/multi_turn_coherence.py` — spec, probe, curve fit,
+  verdict mapping, sparkline.
+- `probes/__init__.py` — registers the new probe.
+
+**Test surface:**
+- `tests/unit/test_probe_multi_turn_coherence.py` — 22 unit tests
+  covering skip paths, end-to-end with planted-distribution
+  sequences (decreasing / flat / growing curves), fit math (clean
+  exp / stable / growing / zero / partial-zero), verdict mapping,
+  sparkline rendering, and chat-template detection.
+- `tests/integration/test_probe_multi_turn_coherence.py` —
+  slow+online HF smoke on a tiny SmolLM2-135M LoRA across 3
+  dialogue turns. Exercises the full chat-template + turn-loop +
+  curve-fit path on a real backend.
+
+**README** gains a "Multi-turn coherence" section between
+`Tool-use fidelity` and `Reproducing a sway run` with a worked
+YAML example. The probe table at "Why it exists" picks up the
+new entry under Adherence (plus `tool_use_fidelity` under
+Attribution — the table missed S27's addition).
+
 ### Sprint 28 — `tenseleyflow/sway-action` GitHub Action
 
 Closes the P2 "GitHub Action" discoverability item from Audit 03
