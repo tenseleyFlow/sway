@@ -169,13 +169,13 @@ user-authored document. The right question is *"did the adapter actually
 move the model toward what I wrote?"* — and existing tools answer this
 poorly.
 
-`sway` answers it directly via thirteen primitives across four
+`sway` answers it directly via fourteen primitives across four
 categories, plus a baseline-calibration primitive:
 
 | Category      | Primitives                                            |
 |---------------|-------------------------------------------------------|
-| Adherence     | `delta_kl`, `adapter_revert`, `prompt_collapse`, `cluster_kl` |
-| Attribution   | `section_internalization`, `paraphrase_invariance`, `preference_flip` |
+| Adherence     | `delta_kl`, `adapter_revert`, `prompt_collapse`, `cluster_kl`, `multi_turn_coherence_decay` |
+| Attribution   | `section_internalization`, `paraphrase_invariance`, `preference_flip`, `tool_use_fidelity` |
 | Calibration   | `style_fingerprint`, `calibration_drift`, `leakage`, `external_perplexity` |
 | Ablation      | `adapter_ablation` ← the signature primitive          |
 | Baseline      | `null_adapter` (powers every z-score in the report)   |
@@ -422,6 +422,39 @@ the largest user surface.
 `json_valid_rate_ft` is z-scored against the null-adapter baseline
 when `null_adapter` is in the suite — the principled "the adapter
 preserved the base's tool-call structure beyond noise" signal.
+
+## Multi-turn coherence
+
+Every other adherence probe is single-turn: one user message, one
+ft response, one score. Adapters that pass `delta_kl` cleanly
+frequently *forget their training* by turn 2 or 3 of a real
+dialogue — the model's own previous responses fill the context
+window and create compounding drift. The
+`multi_turn_coherence_decay` probe rolls a multi-turn synthetic
+dialogue per prompt and fits an exponential-decay curve to the
+per-turn KL:
+
+```yaml
+suite:
+  - name: holds_a_conversation
+    kind: multi_turn_coherence_decay
+    prompts:
+      - "Explain how a neural network learns."
+      - "What's the difference between TCP and UDP?"
+    max_turns: 4
+    assert_half_life_turns: 2.0
+```
+
+The probe reports `half_life_turns` (the turn at which adapter
+influence is halved), a per-turn KL list, and a tiny ASCII
+sparkline in the report message so you can see the curve shape
+without opening the JSON. Bases without a `chat_template` SKIP
+gracefully — multi-turn requires one to format dialogue history.
+
+The probe deliberately **doesn't** z-score against the null-adapter
+baseline (a null adapter has no coherence to decay; the null
+distribution is meaningless). Fixed-threshold verdicts are the
+published path. Mirrors `prompt_collapse`.
 
 ## Reproducing a sway run
 
