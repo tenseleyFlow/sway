@@ -139,9 +139,7 @@ class TestScore:
         app, _cache = _make_seeded_app()
         # Build a spec with two probes, then ask /score for one.
         spec = _spec_payload()
-        spec["suite"].append(
-            {"name": "dk2", "kind": "delta_kl", "prompts": ["different"]}
-        )
+        spec["suite"].append({"name": "dk2", "kind": "delta_kl", "prompts": ["different"]})
         with TestClient(app) as client:
             resp = client.post(
                 "/score",
@@ -155,9 +153,7 @@ class TestScore:
     def test_score_runs_all_when_probe_names_none(self) -> None:
         app, _cache = _make_seeded_app()
         spec = _spec_payload()
-        spec["suite"].append(
-            {"name": "dk2", "kind": "delta_kl", "prompts": ["other"]}
-        )
+        spec["suite"].append({"name": "dk2", "kind": "delta_kl", "prompts": ["other"]})
         with TestClient(app) as client:
             resp = client.post("/score", json={"spec": spec})
         assert resp.status_code == 200, resp.text

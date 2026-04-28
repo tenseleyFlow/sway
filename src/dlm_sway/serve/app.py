@@ -208,9 +208,7 @@ def create_app(
             "uptime_seconds": time.monotonic() - started_at,
             "request_count": request_count,
             "total_run_seconds": total_run_seconds,
-            "mean_run_seconds": (
-                total_run_seconds / request_count if request_count > 0 else None
-            ),
+            "mean_run_seconds": (total_run_seconds / request_count if request_count > 0 else None),
             "cached_backends": len(cache.loaded_keys()),
             "max_loaded_models": cache.max_size,
         }
