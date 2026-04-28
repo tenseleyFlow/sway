@@ -55,6 +55,7 @@ app.command("list-probes")(commands.list_probes_cmd)
 app.command("convert-adapter")(commands.convert_adapter_cmd)
 app.command("pack")(commands.pack_cmd)
 app.command("unpack")(commands.unpack_cmd)
+app.command("serve")(commands.serve_cmd)
 
 
 def main() -> None:

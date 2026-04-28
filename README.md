@@ -472,6 +472,49 @@ baseline (a null adapter has no coherence to decay; the null
 distribution is meaningless). Fixed-threshold verdicts are the
 published path. Mirrors `prompt_collapse`.
 
+## Serve daemon
+
+Loading the HF backend takes ~15s every time you run `sway run`. For
+notebook exploration, the `sway watch` retrain loop, or any flow that
+fires the suite repeatedly against the same model, that startup is
+the dominant cost. `sway serve` keeps the backend warm in a small
+FastAPI daemon: first request pays the load, subsequent requests
+reuse the cached weights.
+
+```bash
+pip install 'dlm-sway[serve]'   # adds fastapi + uvicorn + httpx
+sway serve --port 8787 --max-loaded-models 2
+```
+
+Default bind is `127.0.0.1`. The daemon refuses to start on a
+non-loopback interface unless you pass `--api-key <token>`, after
+which every non-`/health` request must carry
+`Authorization: Bearer <token>`.
+
+```bash
+# With curl — sweetspot is from inside a notebook or watch loop.
+curl -s -X POST http://localhost:8787/run \
+  -H 'Content-Type: application/json' \
+  -d "$(yq -o=json sway.yaml | jq -c '{spec: .}')" | jq .score
+```
+
+```python
+# From a notebook (or any Python).
+from dlm_sway.serve.client import ServeClient
+from dlm_sway.suite.loader import load_spec
+
+client = ServeClient("http://localhost:8787")
+report = client.run(load_spec("sway.yaml"))
+print(report["score"])              # full report shape mirrors `sway run --json`
+print(report["request_seconds"])    # cold ~15s; warm ~2s
+```
+
+The cache is keyed on `(kind, base, adapter, dtype, device)` and capped
+at `--max-loaded-models` (default 2). Loading a third distinct model
+LRU-evicts the oldest, calling `backend.close()` to release the
+weights. `GET /health` reports the currently-warm models;
+`GET /stats` reports request count and mean latency.
+
 ## Reproducing a sway run
 
 Sometimes you want a coworker (or a future-you, or a bug report) to

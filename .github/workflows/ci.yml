@@ -51,8 +51,11 @@ jobs:
       # the not-yet-published ``dlm`` package. ``uv pip install -e``
       # only installs what's named — matches the README's documented
       # install path and keeps CI honest about what users see.
-      - name: Install dev deps (core only — no heavy extras)
-        run: uv pip install -e "." --group dev
+      - name: Install dev deps (core + [serve] for unit tests + mypy)
+        # The serve package's mypy run needs fastapi/uvicorn type info,
+        # and the new serve unit tests exercise FastAPI's TestClient.
+        # The deps are lightweight (no torch/transformers).
+        run: uv pip install -e ".[serve]" --group dev
 
       - name: ruff check
         run: uv run --no-sync ruff check src tests

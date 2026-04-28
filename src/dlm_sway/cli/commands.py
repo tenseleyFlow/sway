@@ -1387,3 +1387,95 @@ def unpack_cmd(
         typer.echo(f"  SWAY_NULL_CACHE_DIR={report.null_stats_dir} sway run {report.spec_path}")
     else:
         typer.echo(f"  sway run {report.spec_path}")
+
+
+def serve_cmd(
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help=(
+                "Interface to bind. Default 127.0.0.1 (localhost only). "
+                "Binding to 0.0.0.0 requires --api-key."
+            ),
+        ),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="TCP port to bind."),
+    ] = 8787,
+    max_loaded_models: Annotated[
+        int,
+        typer.Option(
+            "--max-loaded-models",
+            help=(
+                "How many backends to keep warm in memory. Each loaded "
+                "model holds its own VRAM/RAM; default 2 fits a 16 GB GPU "
+                "with two ~1.5B fp16 adapters."
+            ),
+        ),
+    ] = 2,
+    api_key: Annotated[
+        str | None,
+        typer.Option(
+            "--api-key",
+            help=(
+                "Bearer token required on every non-/health request. "
+                "Required when --host is not loopback."
+            ),
+        ),
+    ] = None,
+    log_level: Annotated[
+        str,
+        typer.Option("--log-level", help="uvicorn log level."),
+    ] = "info",
+) -> None:
+    """Run the warm-backend HTTP daemon (S36).
+
+    First call loads the backend (~15s); subsequent calls reuse it
+    (~2s). See ``sway run`` for the equivalent one-shot CLI.
+    """
+    try:
+        import uvicorn  # noqa: F401  — presence check
+    except ImportError as exc:
+        typer.secho(
+            "sway serve requires the [serve] extra: pip install 'dlm-sway[serve]'",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
+
+    from dlm_sway.serve.app import create_app, parse_host_port
+    from dlm_sway.serve.cache import BackendCache
+
+    # Public-bind safety — refuse before any uvicorn startup work.
+    loopback = host in ("127.0.0.1", "::1", "localhost")
+    if not loopback and api_key is None:
+        typer.secho(
+            f"refusing to bind {host}:{port} without --api-key. "
+            "Either pass --api-key <key> or use --host 127.0.0.1.",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    parse_host_port(host, port)
+    if max_loaded_models < 1:
+        typer.secho("--max-loaded-models must be >= 1", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    cache = BackendCache(max_size=max_loaded_models)
+    app = create_app(cache=cache, api_key=api_key)
+
+    typer.echo(f"sway serve {__version__} listening on http://{host}:{port}")
+    typer.echo(f"  max_loaded_models={max_loaded_models}  auth={'yes' if api_key else 'no'}")
+    if not loopback:
+        typer.secho(
+            "  WARNING: bound to a non-loopback interface — anyone on "
+            "this network with the API key can drive your GPU.",
+            fg=typer.colors.YELLOW,
+        )
+
+    import uvicorn as _uvicorn
+
+    _uvicorn.run(app, host=host, port=port, log_level=log_level)
