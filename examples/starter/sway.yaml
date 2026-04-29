@@ -1,0 +1,106 @@
+# Starter sway spec — the recipe Audit 13 recommends as the first
+# spec a new user authors. Demonstrates:
+#
+# 1. ``null_adapter`` calibration. Without it every numeric probe
+#    reports a verdict but no z-score, and "did training do anything?"
+#    becomes a vibes call. The audit explicitly recommends this become
+#    the default.
+# 2. The bridge-aware probes — ``section_internalization``,
+#    ``leakage``, and ``paraphrase_invariance`` — which require the
+#    ``[dlm]`` extra:
+#
+#        pip install 'dlm-sway[hf,dlm]'
+#
+#    Without ``[dlm]``, those probes opt-out (SKIP) silently. The bridge
+#    activates them by mining sections from the .dlm referenced via
+#    ``dlm_source:`` below.
+# 3. ``adapter_ablation`` — sway's signature probe. A healthy
+#    fine-tune produces a monotonic, non-saturated λ-scaled KL curve
+#    (linearity ≥ 0.85, saturation in (0.3, 1.05]).
+# 4. ``calibration_drift`` — guards the *general* competence the
+#    base model came with. Without it you can ship an adapter that
+#    learned the document and forgot the world.
+
+version: 1
+
+# Replace this with your own .dlm path. The bridge resolves the dlm
+# store, the adapter pointer, and the section list automatically.
+dlm_source: ./mydoc.dlm
+
+models:
+  base:
+    kind: hf
+    base: HuggingFaceTB/SmolLM2-135M-Instruct
+  ft:
+    kind: hf
+    base: HuggingFaceTB/SmolLM2-135M-Instruct
+    # Resolved automatically when ``dlm_source:`` is set above. Override
+    # here if you want to point at a specific historical adapter version.
+    # adapter: ~/.dlm/store/<YOUR_DLM_ID>/adapter/versions/v0001
+
+defaults:
+  seed: 0
+  differential: true
+  # Composite-score gate threshold. Tighten for stricter PR gates;
+  # loosen for early experiments where you only want a sanity floor.
+  coverage_threshold: 0.6
+  score_weights:
+    adherence: 0.30
+    attribution: 0.35
+    calibration: 0.20
+    ablation: 0.15
+
+suite:
+  # Calibration baseline — z-scores every numeric probe. Without this
+  # the verdicts below are uncalibrated and easy to over-interpret.
+  - name: null_baseline
+    kind: null_adapter
+    runs: 3
+
+  # ADHERENCE — does the adapter actually drive behavior?
+  - name: dk
+    kind: delta_kl
+    prompts:
+      - The key idea here is
+      - An important rule is
+      - When in doubt, the canonical approach is
+    assert_z_gte: 1.0
+    assert_mean_gte: 0.02
+
+  # ATTRIBUTION (bridge-aware — needs [dlm] extra).
+  # Per-section internalization. SKIPs without the bridge.
+  - name: sis
+    kind: section_internalization
+    assert_z_gte: 1.0
+    assert_passing_section_frac: 0.5
+
+  # Memorize-vs-generalize. The audit's load-bearing probe for the
+  # question *"did Q/A binding land?"* — paraphrased variants of each
+  # instruction probe should still be answered correctly.
+  - name: paraphrase
+    kind: paraphrase_invariance
+    assert_z_gte: 1.0
+
+  # Leakage / fragility — verbatim recital under prefix perturbations.
+  # High raw + high fragility = pattern-match (good); high raw + low
+  # fragility = rote memorization (bad).
+  - name: leak
+    kind: leakage
+    assert_z_gte: 1.0
+
+  # CALIBRATION — did we break the base while fitting the document?
+  - name: cal_general
+    kind: calibration_drift
+    items_limit: 50
+    assert_z_gte: 1.0
+
+  # ABLATION (the sway signature) — λ-scaled KL curve. Healthy
+  # fine-tunes have a monotonic, non-saturated response in λ ∈ [0,1.25].
+  - name: ablation
+    kind: adapter_ablation
+    lambdas: [0.0, 0.25, 0.5, 0.75, 1.0, 1.25]
+    prompts:
+      - Explain the central concept
+      - What's the most important takeaway
+    assert_linearity_gte: 0.85
+    assert_z_gte: 1.0
