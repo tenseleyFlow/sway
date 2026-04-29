@@ -29,6 +29,12 @@ defaults:
   # real specs raise this to 0.6 or 0.8 for a meaningful quality bar.
   coverage_threshold: 0.0
 suite:
+  # ``null_adapter`` calibrates ``dk`` below — without it, a delta_kl
+  # of 0.08 reads identically to noise. Adds ~3s to the hook; well
+  # worth the cost for a falsifiable verdict. (Audit 13 m13.8.)
+  - name: null_baseline
+    kind: null_adapter
+    runs: 3
   # One cheap probe keeps the pre-commit hook fast. Add more probes as
   # the adapter gets more surface area worth gating.
   - name: dk
