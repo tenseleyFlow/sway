@@ -159,6 +159,18 @@ suite:
      prompts: ["Tell me more about"]}
 ```
 
+> **`null_adapter` is load-bearing.** Without it, every numeric
+> probe reports a verdict but no z-score, and *"did training do
+> anything?"* becomes a vibes call. Always include it. The audit
+> finding behind this was so consistent it became a default
+> recommendation — see `examples/starter/sway.yaml` for a fully-
+> calibrated, bridge-aware starter spec.
+
+> **Bridge probes need `[dlm]`.** `section_internalization`,
+> `leakage`, and `paraphrase_invariance` opt-out (SKIP) without
+> the `.dlm` integration installed. Add `'[dlm]'` to your
+> install: `pip install 'dlm-sway[hf,dlm]'`.
+
 ```bash
 sway run sway.yaml              # full report to terminal + JSON
 sway gate sway.yaml --junit     # CI-friendly; non-zero on fail
